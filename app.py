@@ -3,25 +3,23 @@ import os
 import requests
 import base64
 import threading
+import random
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# Flaskアプリ初期化
 app = Flask(__name__)
-load_dotenv()  # .envから環境変数を読み込む
+load_dotenv()
 
-# 環境変数の読み込み
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 
-# OpenAIクライアントの初期化
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 @app.route("/", methods=['GET', 'HEAD', 'POST'])
 def webhook():
     if request.method in ['GET', 'HEAD']:
-        return "OK", 200  # LINEの疎通確認用
+        return "OK", 200
 
     try:
         body = request.get_json()
@@ -31,7 +29,6 @@ def webhook():
             print("[⚠️ イベントなし]")
             return "No events", 200
 
-        print("✅ イベントを検出、非同期で処理開始")
         threading.Thread(target=handle_event, args=(body,)).start()
         return "OK", 200
 
@@ -42,13 +39,14 @@ def webhook():
 def handle_event(body):
     try:
         event = body['events'][0]
-        print("✅ 処理対象イベント:", event)
+        print("✅ イベント:", event)
 
         if event['type'] == 'message':
             msg_type = event['message']['type']
             reply_token = event['replyToken']
 
             if msg_type == 'image':
+                print("🖼️ 画像メッセージ処理開始")
                 message_id = event['message']['id']
                 headers = {
                     "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
@@ -59,7 +57,6 @@ def handle_event(body):
                 mime_type = image_response.headers.get('Content-Type', 'image/jpeg')
                 image_b64 = base64.b64encode(image_binary).decode("utf-8")
 
-                # OpenAIに画像と指示を送信
                 response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[
@@ -73,18 +70,40 @@ def handle_event(body):
                     ],
                     max_tokens=500
                 )
-
                 reply_text = response.choices[0].message.content
 
             elif msg_type == 'text':
-                reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
+                user_message = event['message']['text']
+                print("📝 テキストメッセージ:", user_message)
+
+                if "店舗名" in user_message:
+                    # 店舗名抽出をGPTに任せる
+                    gpt_response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": f"以下の文から店舗名だけを抽出してください。記号や余計な語を除いて、店舗名そのものだけを返してください：\n\n{user_message}"
+                            }
+                        ],
+                        max_tokens=50
+                    )
+                    store_name = gpt_response.choices[0].message.content.strip()
+                    store_id = random.randint(100000, 999999)
+                    reply_text = f"登録完了：店舗名：{store_name}、店舗ID：{store_id}"
+
+                    # TODO: スプレッドシートやDBに保存する場合はここで実装
+
+                else:
+                    reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
+
             else:
                 reply_text = "画像を送ってください。"
 
             reply(reply_token, reply_text)
 
     except Exception as e:
-        print("[❌ handle_event エラー]", e)
+        print("[❌ handle_eventエラー]", e)
 
 def reply(reply_token, text):
     headers = {
@@ -101,7 +120,7 @@ def reply(reply_token, text):
     print("📨 LINE返信ステータス:", res.status_code)
     print("📨 LINE返信レスポンス:", res.text)
 
-# アプリの起動（RenderではPORTが環境変数で渡される）
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+

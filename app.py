@@ -45,7 +45,6 @@ def handle_event(body):
         state = user_state.get(user_id, {"step": "start"})
 
         if msg_type == 'text':
-            # ステップ1: 店舗名抽出
             if state['step'] == 'start':
                 gpt_response = client.chat.completions.create(
                     model="gpt-4o",
@@ -61,7 +60,6 @@ def handle_event(body):
                 }
                 reply_text = f"登録完了：店舗名：{store_name} 店舗ID：{store_id}\n\nこの内容で間違いないですか？\n\n「はい」「いいえ」でお答えください。"
 
-            # ステップ2: 店舗名確認
             elif state["step"] == "confirm_store":
                 if "はい" in user_message:
                     user_state[user_id]["step"] = "ask_seats"
@@ -72,7 +70,6 @@ def handle_event(body):
                 else:
                     reply_text = "店舗情報が正しいか「はい」または「いいえ」でお答えください。"
 
-            # ステップ3: 座席数入力（新規 or 部分修正）
             elif state['step'] == 'ask_seats':
                 prev = user_state[user_id].get("seat_info", "")
                 gpt_response = client.chat.completions.create(
@@ -87,7 +84,6 @@ def handle_event(body):
                 store_id = user_state[user_id]['store_id']
                 reply_text = f"✅ 登録情報の確認です：\n\n- 店舗名：{store_name}\n- 店舗ID：{store_id}\n- 座席数：\n{seat_info}\n\nこの内容で登録してもよろしいですか？\n\n「はい」「いいえ」でお答えください。"
 
-            # ステップ4: 座席確認
             elif state["step"] == "confirm_seats":
                 if "はい" in user_message:
                     reply_text = (
@@ -108,6 +104,14 @@ def handle_event(body):
             else:
                 reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
 
+        elif msg_type == 'image' and state['step'] == 'wait_for_image':
+            reply_text = (
+                "画像を受け取りました📸\n\n"
+                "この予約表の形式をもとに、AIが内容を学習し、\n"
+                "今後の予約表データをサーバーに記録できるように設定します。\n\n"
+                "しばらくお待ちください..."
+            )
+
         else:
             reply_text = "画像を送ってください。"
 
@@ -115,7 +119,6 @@ def handle_event(body):
 
     except Exception as e:
         print("[handle_event error]", e)
-
 
 def reply(reply_token, text):
     headers = {

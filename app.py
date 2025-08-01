@@ -1,4 +1,4 @@
-# ✅ LINE予約管理BOT（一覧確認付き）
+# ✅ LINE予約管理BOT（一覧確認・柔軟入力対応版）
 from flask import Flask, request
 import os
 import requests
@@ -46,7 +46,7 @@ def handle_event(body):
 
         if msg_type == 'text':
             # ステップ1: 店舗名抽出
-            if state['step'] == 'start' and '店舗名' in user_message:
+            if state['step'] == 'start':
                 gpt_response = client.chat.completions.create(
                     model="gpt-4o",
                     messages=[{"role": "user", "content": f"以下の文から店舗名だけを抽出してください：\n{user_message}"}],
@@ -59,7 +59,7 @@ def handle_event(body):
                     "store_name": store_name,
                     "store_id": store_id
                 }
-                reply_text = f"登録完了：店舗名：{store_name} 店舗ID：{store_id}\n\nこの内容で間違いないですか？「はい」「いいえ」でお答えください。"
+                reply_text = f"登録完了：店舗名：{store_name} 店舗ID：{store_id}\n\nこの内容で間違いないですか？\n\n「はい」「いいえ」でお答えください。"
 
             # ステップ2: 店舗名確認
             elif state["step"] == "confirm_store":
@@ -68,15 +68,16 @@ def handle_event(body):
                     reply_text = "次に、座席数を教えてください。\n例：「1人席: 3、2人席: 2、4人席: 1」"
                 elif "いいえ" in user_message:
                     user_state[user_id] = {"step": "start"}
-                    reply_text = "もう一度、店舗名を「店舗名は〇〇です」の形式で送ってください。"
+                    reply_text = "もう一度、店舗名を送ってください。"
                 else:
                     reply_text = "店舗情報が正しいか「はい」または「いいえ」でお答えください。"
 
-            # ステップ3: 座席数入力
+            # ステップ3: 座席数入力（新規 or 部分修正）
             elif state['step'] == 'ask_seats':
+                prev = user_state[user_id].get("seat_info", "")
                 gpt_response = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[{"role": "user", "content": f"以下の文から1人席、2人席、4人席の数を抽出して次の形式で答えてください：\n1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{user_message}"}],
+                    messages=[{"role": "user", "content": f"以下の文と、前の座席数「{prev}」をもとに、1人席、2人席、4人席の数を抽出して次の形式で答えてください：\n1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{user_message}"}],
                     max_tokens=100
                 )
                 seat_info = gpt_response.choices[0].message.content.strip()
@@ -84,7 +85,7 @@ def handle_event(body):
                 user_state[user_id]["step"] = "confirm_seats"
                 store_name = user_state[user_id]['store_name']
                 store_id = user_state[user_id]['store_id']
-                reply_text = f"✅ 登録情報の確認です：\n\n- 店舗名：{store_name}\n- 店舗ID：{store_id}\n- 座席数：\n{seat_info}\n\nこの内容で登録してもよろしいですか？「はい」「いいえ」でお答えください。"
+                reply_text = f"✅ 登録情報の確認です：\n\n- 店舗名：{store_name}\n- 店舗ID：{store_id}\n- 座席数：\n{seat_info}\n\nこの内容で登録してもよろしいですか？\n\n「はい」「いいえ」でお答えください。"
 
             # ステップ4: 座席確認
             elif state["step"] == "confirm_seats":

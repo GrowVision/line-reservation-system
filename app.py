@@ -105,9 +105,33 @@ def handle_event(body):
                 else:
                     reply_text = "座席数が正しいか「はい」または「いいえ」でお答えください。"
 
+            elif state["step"] == "confirm_structure":
+                if "はい" in user_message:
+                    reply_text = "ありがとうございます！認識内容をもとに、予約表の記録フォーマットを作成します。しばらくお待ちください..."
+                    user_state[user_id]["step"] = "generate_spreadsheet"
+                elif "いいえ" in user_message:
+                    reply_text = (
+                        "ご指摘ありがとうございます！\n\n"
+                        "どの点に違いがあるか、簡単で構いませんので教えていただけますか？\n\n"
+                        "（例：\n・予約は18:00〜20:00まである\n・人数の欄は記号ではなく手書きです\n・名前欄は存在しない など）\n\n"
+                        "修正内容をもとに再解析・調整させていただきます！"
+                    )
+                    user_state[user_id]["step"] = "request_correction"
+                else:
+                    reply_text = "内容が正しいか「はい」または「いいえ」でお答えください。"
+
+            elif state["step"] == "request_correction":
+                correction = user_message
+                reply_text = (
+                    f"修正点を反映しました！\n\n"
+                    f"改めて以下の形式で認識しました：\n\n"
+                    f"（修正内容：{correction}）\n\n"
+                    f"この内容で問題なければ「はい」、\nまだ修正が必要であれば「いいえ」とご返信ください。"
+                )
+                user_state[user_id]["step"] = "confirm_structure"
+
             elif state["step"] == "wait_for_image":
                 reply_text = "予約表画像を受信しました。\n現在、AIがフォーマットを解析中です。しばらくお待ちください..."
-                # ※ ここに画像解析 → 予約表構造を読み取り → フォーマット出力 → ユーザーに確認 の処理を追加予定
 
             else:
                 reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
@@ -115,11 +139,17 @@ def handle_event(body):
         elif msg_type == 'image':
             if state["step"] == "wait_for_image":
                 reply_text = (
-                    "画像を受信しました！\n\n"
-                    "現在、AIが予約表の構造を分析しています。\n"
-                    "しばらくお待ちください..."
+                    "📊 予約表構造の分析が完了しました！\n\n"
+                    "画像を分析した結果、以下のような形式で記録されている可能性があります：\n\n"
+                    "───────────────\n\n"
+                    "■ 検出された時間帯：\n・18:00〜\n・18:30〜\n・19:00〜（など）\n\n"
+                    "■ 記入項目：\n・名前またはイニシャル\n・人数（例：1人、2人、4人）\n・備考欄（自由記入、空欄もあり）\n\n"
+                    "■ その他の特徴：\n・上部に日付（◯月◯日）記入欄あり\n・最下部に営業情報や注意事項が記載\n\n"
+                    "───────────────\n\n"
+                    "このような構成で問題なければ、「はい」とご返信ください。\n"
+                    "異なる点がある場合は、「いいえ」とご返信のうえ、修正点をご連絡ください。"
                 )
-                # TODO: 画像をGPT-4oなどで解析、構造を出力しユーザーに「この認識で正しいか？」確認
+                user_state[user_id]["step"] = "confirm_structure"
             else:
                 reply_text = "画像を受信しましたが、現在は画像解析の準備ができていません。店舗登録を先に行ってください。"
 

@@ -2,3 +2,5 @@ flask
 requests
 python-dotenv
 openai
+gspread
+oauth2client

@@ -105,8 +105,23 @@ def handle_event(body):
                 else:
                     reply_text = "座席数が正しいか「はい」または「いいえ」でお答えください。"
 
+            elif state["step"] == "wait_for_image":
+                reply_text = "予約表画像を受信しました。\n現在、AIがフォーマットを解析中です。しばらくお待ちください..."
+                # ※ ここに画像解析 → 予約表構造を読み取り → フォーマット出力 → ユーザーに確認 の処理を追加予定
+
             else:
                 reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
+
+        elif msg_type == 'image':
+            if state["step"] == "wait_for_image":
+                reply_text = (
+                    "画像を受信しました！\n\n"
+                    "現在、AIが予約表の構造を分析しています。\n"
+                    "しばらくお待ちください..."
+                )
+                # TODO: 画像をGPT-4oなどで解析、構造を出力しユーザーに「この認識で正しいか？」確認
+            else:
+                reply_text = "画像を受信しましたが、現在は画像解析の準備ができていません。店舗登録を先に行ってください。"
 
         else:
             reply_text = "画像を送ってください。"

@@ -6,7 +6,6 @@ import base64
 import threading
 import random
 import json
-import gspread
 from dotenv import load_dotenv
 from openai import OpenAI
 from oauth2client.service_account import ServiceAccountCredentials
@@ -50,7 +49,6 @@ def handle_event(body):
         state = user_state.get(user_id, {"step": "start"})
 
         if msg_type == 'text':
-            # ステップ1: 店舗名抽出
             if state['step'] == 'start':
                 gpt_response = client.chat.completions.create(
                     model="gpt-4o",

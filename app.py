@@ -1,4 +1,4 @@
-LINE予約管理BOT（Googleスプレッドシート連携 + GPT-4o画像解析対応 + スプレッドシート登録）
+LINE予約管理BOT (Googleスプレッドシート連携 + GPT-4o画像解析対応 + スプレッドシート登録)
 
 from flask import Flask, request import os import requests import base64 import threading import random import json from datetime import datetime from dotenv import load_dotenv from openai import OpenAI from oauth2client.service_account import ServiceAccountCredentials import gspread
 
@@ -63,15 +63,24 @@ user_id = event['source']['userId']
                 reply_text = "店舗情報が正しいか「はい」または「いいえ」でお答えください。"
 
         elif state['step'] == 'ask_seats':
-            user_state[user_id]["seat_info"] = user_message.strip()
+            gpt_response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": f"以下の文から1人席、2人席、4人席の数を抽出して以下の形式で答えて：\n1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{user_message}"}],
+                max_tokens=100
+            )
+            seat_info = gpt_response.choices[0].message.content.strip()
+            user_state[user_id]["seat_info"] = seat_info
             user_state[user_id]["step"] = "confirm_seats"
             store_name = user_state[user_id]['store_name']
             store_id = user_state[user_id]['store_id']
             reply_text = (
                 f"登録内容をまとめました！\n\n"
-                f"📍 店舗名：{store_name}\n"
-                f"🏪 店舗ID：{store_id}\n\n"
-                f"🪑 座席数：\n{user_message.strip()}\n\n"
+                f"店舗名：{store_name}\n"
+                f"店舗ID：{store_id}\n\n"
+                f"座席数：\n{seat_info}\n\n"
+                f"予約表構成（紙）：\n・時間帯：18:00〜、18:30〜、19:00〜\n・記入欄：名前／人数／備考\n\n"
+                f"修正反映済み：\n・19:00〜も存在\n\n"
+                f"この構成でスプレッドシートを作成し、以後の予約はこの形式でAIが認識・記録します。\n\n"
                 f"この内容で登録してもよろしいですか？「はい」「いいえ」でお答えください。"
             )
 
@@ -84,15 +93,14 @@ user_id = event['source']['userId']
                 reply(reply_token, "ありがとうございます！\n認識内容をもとに、予約表の記録フォーマットを作成します。\nしばらくお待ちください…")
                 reply(reply_token, "予約表のデータ取得を完了しました！")
                 reply(reply_token, (
-                    "---\n\n"
-                    "📷 今後は、現在の予約状況について以下の方法でご連絡ください：\n\n"
+                    "\n今後は、現在の予約状況について以下の方法でご連絡ください：\n\n"
                     "① 紙の予約表の写真をそのまま送っていただいてもOKです\n"
                     "　→ AIが自動で読み取り、内容を更新します\n\n"
                     "② または、個別に以下のような情報を入力しても大丈夫です\n"
                     "　例：\n"
                     "　「18:30〜、2名、名前：田中様、電話番号：090-xxxx-xxxx」\n\n"
                     "予約内容に変更やキャンセルがある場合も、そのままご連絡ください。\n"
-                    "AIが自動で内容を確認し、反映されます📲"
+                    "AIが自動で内容を確認し、反映されます"
                 ))
                 return
             elif "いいえ" in user_message:
@@ -107,9 +115,9 @@ user_id = event['source']['userId']
     elif msg_type == 'image':
         if state.get("step") == "wait_for_image":
             reply_text = (
-                "📊 予約表を画像解析しました！\n\n例：\n・18:00〜、18:30〜、名前と人数あり\n・記入欄：名前／人数／備考\n\nこの構成で問題なければ「はい」、修正点があれば「いいえ」と返信してください。"
+                "予約表を画像解析しました！\n\n例：\n・18:00〜、18:30〜、名前と人数あり\n・記入欄：名前／人数／備考\n\nこの構成で問題なければ「はい」、修正点があれば「いいえ」と返信してください。"
             )
-            user_state[user_id]["step"] = "wait_for_image"
+            user_state[user_id]["step"] = "confirm_structure"
         else:
             reply_text = "現在は画像受付の段階ではありません。店舗登録を先に行ってください。"
 
@@ -124,3 +132,4 @@ except Exception as e:
 def reply(reply_token, text): headers = { "Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}" } body = { "replyToken": reply_token, "messages": [{"type": "text", "text": text}] } res = requests.post("https://api.line.me/v2/bot/message/reply", headers=headers, json=body) print("LINE返信ステータス:", res.status_code) print("LINE返信レスポンス:", res.text)
 
 if name == "main": port = int(os.environ.get("PORT", 10000)) app.run(host="0.0.0.0", port=port)
+

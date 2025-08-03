@@ -124,4 +124,3 @@ except Exception as e:
 def reply(reply_token, text): headers = { "Content-Type": "application/json", "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}" } body = { "replyToken": reply_token, "messages": [{"type": "text", "text": text}] } res = requests.post("https://api.line.me/v2/bot/message/reply", headers=headers, json=body) print("LINE返信ステータス:", res.status_code) print("LINE返信レスポンス:", res.text)
 
 if name == "main": port = int(os.environ.get("PORT", 10000)) app.run(host="0.0.0.0", port=port)
-

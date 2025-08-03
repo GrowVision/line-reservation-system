@@ -1,4 +1,4 @@
-LINE予約管理BOT（Googleスプレッドシート連携 + GPT-4o画像解析対応 + スプレッドシート登録）
+# LINE予約管理BOT - Googleスプレッドシート連携 + GPT-4o画像解析対応
 
 from flask import Flask, request import os import requests import base64 import threading import random import json from datetime import datetime from dotenv import load_dotenv from openai import OpenAI from oauth2client.service_account import ServiceAccountCredentials import gspread
 

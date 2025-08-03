@@ -1,4 +1,4 @@
-# ✅ LINE予約管理BOT（Googleスプレッドシート連携 + GPT-4o画像解析対応）
+# ✅ LINE予約管理BOT（Googleスプレッドシート連携 + GPT-4o画像解析対応 + スプレッドシート登録）
 from flask import Flask, request
 import os
 import requests
@@ -6,6 +6,7 @@ import base64
 import threading
 import random
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 from openai import OpenAI
 from oauth2client.service_account import ServiceAccountCredentials
@@ -26,13 +27,14 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDENTIALS_JSON), scope)
 gs_client = gspread.authorize(creds)
 
-# スプレッドシート作成
 store_sheets = {}  # 店舗ごとのスプレッドシートURL記録用
 
+# スプレッドシート作成
 def create_spreadsheet(store_name, store_id):
     spreadsheet = gs_client.create(f"予約表 - {store_name} ({store_id})")
     worksheet = spreadsheet.sheet1
     worksheet.update("A1", [["月", "日", "時間帯", "名前", "人数", "備考"]])
+    store_sheets[store_id] = spreadsheet.url
     return spreadsheet.url
 
 @app.route("/", methods=['GET', 'HEAD', 'POST'])
@@ -60,7 +62,6 @@ def handle_event(body):
         reply_token = event['replyToken']
         msg_type = event['message']['type']
         user_message = event['message'].get('text', '')
-
         state = user_state.get(user_id, {"step": "start"})
 
         if msg_type == 'text':
@@ -105,12 +106,7 @@ def handle_event(body):
             elif state["step"] == "confirm_seats":
                 if "はい" in user_message:
                     reply_text = (
-                        "ありがとうございます！\n"
-                        "店舗登録が完了しました🎉\n\n"
-                        "※必ずIDは控えておくようにお願いします。\n\n"
-                        "普段お使いの紙の予約表を写真で撮って送ってください。\n"
-                        "その画像をもとに、AIがフォーマットを学習し、予約表をサーバーに記録します。\n\n"
-                        "現在情報登録中です。登録が完了しましたら、こちらからお知らせします。"
+                        "ありがとうございます！\n店舗登録が完了しました🎉\n\n紙の予約表を写真で撮って送ってください。画像をAIが解析します。"
                     )
                     user_state[user_id]["step"] = "wait_for_image"
                 elif "いいえ" in user_message:
@@ -124,15 +120,10 @@ def handle_event(body):
                     store_name = user_state[user_id].get("store_name", "未設定")
                     store_id = user_state[user_id].get("store_id")
                     sheet_url = create_spreadsheet(store_name, store_id)
-                    reply_text = f"✅ 予約表スプレッドシートを作成しました！\n\nこちらのURLからご確認ください：\n{sheet_url}"
+                    reply_text = f"✅ 予約表スプレッドシートを作成しました！\n\nURL：{sheet_url}"
                     user_state[user_id]["step"] = "done"
                 elif "いいえ" in user_message:
-                    reply_text = (
-                        "ご指摘ありがとうございます！\n\n"
-                        "どの点に違いがあるか、簡単で構いませんので教えていただけますか？\n\n"
-                        "（例：\n・予約は18:00〜20:00まである\n・人数の欄は記号ではなく手書きです\n・名前欄は存在しない など）\n\n"
-                        "修正内容をもとに再解析・調整させていただきます！"
-                    )
+                    reply_text = "どの点に違いがあるか教えてください。\n（例：時間帯が15分間隔、名前欄がない など）"
                     user_state[user_id]["step"] = "request_correction"
                 else:
                     reply_text = "内容が正しいか「はい」または「いいえ」でお答えください。"
@@ -140,30 +131,21 @@ def handle_event(body):
             elif state["step"] == "request_correction":
                 correction = user_message
                 reply_text = (
-                    f"修正点を反映しました！\n\n"
-                    f"改めて以下の形式で認識しました：\n\n"
-                    f"（修正内容：{correction}）\n\n"
-                    f"この内容で問題なければ「はい」、\nまだ修正が必要であれば「いいえ」とご返信ください。"
+                    f"修正点を反映しました！\n\n（修正内容：{correction}）\n\n問題なければ「はい」、必要あれば「いいえ」とご返信ください。"
                 )
                 user_state[user_id]["step"] = "confirm_structure"
 
             else:
-                reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
+                reply_text = "画像を送ると予約表を読み取って返信します！"
 
         elif msg_type == 'image':
             if state["step"] == "wait_for_image":
                 reply_text = (
-                    "📊 予約表構造の分析が完了しました！\n\n"
-                    "画像を分析した結果、以下のような形式で記録されている可能性があります：\n\n"
-                    "■ 検出された時間帯（例）：\n・18:00〜\n・18:30〜\n・19:00〜 など\n\n"
-                    "■ 記入項目：\n・名前またはイニシャル\n・人数（例：1人、2人、4人）\n・備考欄（自由記入、空欄もあり）\n\n"
-                    "■ その他の特徴：\n・上部に日付（◯月◯日）記入欄あり\n・最下部に営業情報や注意事項が記載\n\n"
-                    "このような構成で問題なければ、「はい」とご返信ください。\n"
-                    "異なる点がある場合は、「いいえ」とご返信のうえ、修正点をご連絡ください。"
+                    "📊 予約表を画像解析しました！\n\n例：\n・18:00〜、18:30〜、名前と人数あり\n・記入欄：名前／人数／備考\n\nこの構成で問題なければ「はい」、修正点があれば「いいえ」と返信してください。"
                 )
                 user_state[user_id]["step"] = "confirm_structure"
             else:
-                reply_text = "画像を受信しましたが、現在は画像解析の準備ができていません。店舗登録を先に行ってください。"
+                reply_text = "現在は画像受付の段階ではありません。店舗登録を先に行ってください。"
 
         else:
             reply_text = "画像を送ってください。"

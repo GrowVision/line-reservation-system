@@ -74,13 +74,13 @@ user_id = event['source']['userId']
             store_name = user_state[user_id]['store_name']
             store_id = user_state[user_id]['store_id']
             reply_text = (
-                f"登録内容をまとめました！\n\n"
-                f"店舗名：{store_name}\n"
-                f"店舗ID：{store_id}\n\n"
-                f"座席数：\n{seat_info}\n\n"
-                f"予約表構成（紙）：\n・時間帯：18:00〜、18:30〜、19:00〜\n・記入欄：名前／人数／備考\n\n"
-                f"修正反映済み：\n・19:00〜も存在\n\n"
-                f"この構成でスプレッドシートを作成し、以後の予約はこの形式でAIが認識・記録します。\n\n"
+                f"✅ 登録内容をまとめました！\n\n"
+                f"📍 店舗名：{store_name}\n"
+                f"🏪 店舗ID：{store_id}\n\n"
+                f"🪑 座席数：\n{seat_info}\n\n"
+                f"📝 予約表構成（紙）：\n・時間帯：18:00〜、18:30〜、19:00〜\n・記入欄：名前／人数／備考\n\n"
+                f"✍ 修正反映済み：\n・19:00〜も存在\n\n"
+                f"✅ この構成でスプレッドシートを作成し、以後の予約はこの形式でAIが認識・記録します。\n\n"
                 f"この内容で登録してもよろしいですか？「はい」「いいえ」でお答えください。"
             )
 
@@ -91,16 +91,17 @@ user_id = event['source']['userId']
                 sheet_url = create_spreadsheet(store_name, store_id)
                 user_state[user_id]["step"] = "wait_for_image"
                 reply(reply_token, "ありがとうございます！\n認識内容をもとに、予約表の記録フォーマットを作成します。\nしばらくお待ちください…")
-                reply(reply_token, "予約表のデータ取得を完了しました！")
+                reply(reply_token, "✅ 予約表のデータ取得を完了しました！")
                 reply(reply_token, (
-                    "\n今後は、現在の予約状況について以下の方法でご連絡ください：\n\n"
+                    "---\n\n"
+                    "📷 今後は、現在の予約状況について以下の方法でご連絡ください：\n\n"
                     "① 紙の予約表の写真をそのまま送っていただいてもOKです\n"
                     "　→ AIが自動で読み取り、内容を更新します\n\n"
                     "② または、個別に以下のような情報を入力しても大丈夫です\n"
                     "　例：\n"
                     "　「18:30〜、2名、名前：田中様、電話番号：090-xxxx-xxxx」\n\n"
                     "予約内容に変更やキャンセルがある場合も、そのままご連絡ください。\n"
-                    "AIが自動で内容を確認し、反映されます"
+                    "AIが自動で内容を確認し、反映されます📲"
                 ))
                 return
             elif "いいえ" in user_message:
@@ -109,13 +110,36 @@ user_id = event['source']['userId']
             else:
                 reply_text = "座席数が正しいか「はい」または「いいえ」でお答えください。"
 
+        elif state["step"] == "confirm_structure":
+            if "はい" in user_message:
+                user_state[user_id]["step"] = "image_processing"
+                reply(reply_token, "ありがとうございます！\n認識内容をもとに、予約表の記録フォーマットを作成します。\nしばらくお待ちください…")
+                reply(reply_token, "✅ 予約表のデータ取得を完了しました！")
+                reply(reply_token, (
+                    "---\n\n"
+                    "📷 今後は、現在の予約状況について以下の方法でご連絡ください：\n\n"
+                    "① 紙の予約表の写真をそのまま送っていただいてもOKです\n"
+                    "　→ AIが自動で読み取り、内容を更新します\n\n"
+                    "② または、個別に以下のような情報を入力しても大丈夫です\n"
+                    "　例：\n"
+                    "　「18:30〜、2名、名前：田中様、電話番号：090-xxxx-xxxx」\n\n"
+                    "予約内容に変更やキャンセルがある場合も、そのままご連絡ください。\n"
+                    "AIが自動で内容を確認し、反映されます📲"
+                ))
+                return
+            elif "いいえ" in user_message:
+                user_state[user_id]["step"] = "wait_for_image"
+                reply_text = "もう一度、予約表の画像を送ってください。"
+            else:
+                reply_text = "この内容で登録していいか「はい」または「いいえ」でお答えください。"
+
         else:
             reply_text = "画像を送ると予約表を読み取って返信します！"
 
     elif msg_type == 'image':
         if state.get("step") == "wait_for_image":
             reply_text = (
-                "予約表を画像解析しました！\n\n例：\n・18:00〜、18:30〜、名前と人数あり\n・記入欄：名前／人数／備考\n\nこの構成で問題なければ「はい」、修正点があれば「いいえ」と返信してください。"
+                "📊 予約表を画像解析しました！\n\n例：\n・18:00〜、18:30〜、名前と人数あり\n・記入欄：名前／人数／備考\n\nこの構成で問題なければ「はい」、修正点があれば「いいえ」と返信してください。"
             )
             user_state[user_id]["step"] = "confirm_structure"
         else:

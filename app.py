@@ -1,4 +1,4 @@
-# ✅ LINE予約管理BOT（一覧確認・柔軟入力対応版）
+# ✅ LINE予約管理BOT（Googleスプレッドシート連携 + GPT-4o画像解析対応）
 from flask import Flask, request
 import os
 import requests
@@ -9,16 +9,28 @@ import json
 from dotenv import load_dotenv
 from openai import OpenAI
 from oauth2client.service_account import ServiceAccountCredentials
+import gspread
 
 app = Flask(__name__)
 load_dotenv()
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_SERVICE_ACCOUNT")
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 user_state = {}
+
+# スプレッドシート認証
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDENTIALS_JSON), scope)
+gs_client = gspread.authorize(creds)
+
+def create_spreadsheet(store_name):
+    spreadsheet = gs_client.create(f"予約表 - {store_name}")
+    worksheet = spreadsheet.sheet1
+    worksheet.update("A1", [["月", "日", "18:00", "18:30", "19:00", "人数", "備考"]])
+    return spreadsheet.url
 
 @app.route("/", methods=['GET', 'HEAD', 'POST'])
 def webhook():
@@ -75,10 +87,9 @@ def handle_event(body):
                     reply_text = "店舗情報が正しいか「はい」または「いいえ」でお答えください。"
 
             elif state['step'] == 'ask_seats':
-                prev = user_state[user_id].get("seat_info", "")
                 gpt_response = client.chat.completions.create(
                     model="gpt-4o",
-                    messages=[{"role": "user", "content": f"以下の文と、前の座席数「{prev}」をもとに、1人席、2人席、4人席の数を抽出して次の形式で答えてください：\n1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{user_message}"}],
+                    messages=[{"role": "user", "content": f"以下の文から1人席、2人席、4人席の数を抽出して以下の形式で答えて：\n1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{user_message}"}],
                     max_tokens=100
                 )
                 seat_info = gpt_response.choices[0].message.content.strip()
@@ -101,14 +112,16 @@ def handle_event(body):
                     user_state[user_id]["step"] = "wait_for_image"
                 elif "いいえ" in user_message:
                     user_state[user_id]["step"] = "ask_seats"
-                    reply_text = "もう一度、座席数を入力してください。\n例：「1人席: 3、2人席: 2、4人席: 1」"
+                    reply_text = "もう一度、座席数を入力してください。"
                 else:
                     reply_text = "座席数が正しいか「はい」または「いいえ」でお答えください。"
 
             elif state["step"] == "confirm_structure":
                 if "はい" in user_message:
-                    reply_text = "ありがとうございます！認識内容をもとに、予約表の記録フォーマットを作成します。しばらくお待ちください..."
-                    user_state[user_id]["step"] = "generate_spreadsheet"
+                    store_name = user_state[user_id].get("store_name", "未設定")
+                    sheet_url = create_spreadsheet(store_name)
+                    reply_text = f"✅ 予約表スプレッドシートを作成しました！\n\nこちらのURLからご確認ください：\n{sheet_url}"
+                    user_state[user_id]["step"] = "done"
                 elif "いいえ" in user_message:
                     reply_text = (
                         "ご指摘ありがとうございます！\n\n"
@@ -141,11 +154,9 @@ def handle_event(body):
                 reply_text = (
                     "📊 予約表構造の分析が完了しました！\n\n"
                     "画像を分析した結果、以下のような形式で記録されている可能性があります：\n\n"
-                    "───────────────\n\n"
                     "■ 検出された時間帯：\n・18:00〜\n・18:30〜\n・19:00〜（など）\n\n"
                     "■ 記入項目：\n・名前またはイニシャル\n・人数（例：1人、2人、4人）\n・備考欄（自由記入、空欄もあり）\n\n"
                     "■ その他の特徴：\n・上部に日付（◯月◯日）記入欄あり\n・最下部に営業情報や注意事項が記載\n\n"
-                    "───────────────\n\n"
                     "このような構成で問題なければ、「はい」とご返信ください。\n"
                     "異なる点がある場合は、「いいえ」とご返信のうえ、修正点をご連絡ください。"
                 )

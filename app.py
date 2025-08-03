@@ -26,10 +26,13 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_CREDENTIALS_JSON), scope)
 gs_client = gspread.authorize(creds)
 
-def create_spreadsheet(store_name):
-    spreadsheet = gs_client.create(f"予約表 - {store_name}")
+# スプレッドシート作成
+store_sheets = {}  # 店舗ごとのスプレッドシートURL記録用
+
+def create_spreadsheet(store_name, store_id):
+    spreadsheet = gs_client.create(f"予約表 - {store_name} ({store_id})")
     worksheet = spreadsheet.sheet1
-    worksheet.update("A1", [["月", "日", "18:00", "18:30", "19:00", "人数", "備考"]])
+    worksheet.update("A1", [["月", "日", "時間帯", "名前", "人数", "備考"]])
     return spreadsheet.url
 
 @app.route("/", methods=['GET', 'HEAD', 'POST'])
@@ -119,7 +122,8 @@ def handle_event(body):
             elif state["step"] == "confirm_structure":
                 if "はい" in user_message:
                     store_name = user_state[user_id].get("store_name", "未設定")
-                    sheet_url = create_spreadsheet(store_name)
+                    store_id = user_state[user_id].get("store_id")
+                    sheet_url = create_spreadsheet(store_name, store_id)
                     reply_text = f"✅ 予約表スプレッドシートを作成しました！\n\nこちらのURLからご確認ください：\n{sheet_url}"
                     user_state[user_id]["step"] = "done"
                 elif "いいえ" in user_message:
@@ -143,9 +147,6 @@ def handle_event(body):
                 )
                 user_state[user_id]["step"] = "confirm_structure"
 
-            elif state["step"] == "wait_for_image":
-                reply_text = "予約表画像を受信しました。\n現在、AIがフォーマットを解析中です。しばらくお待ちください..."
-
             else:
                 reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"
 
@@ -154,7 +155,7 @@ def handle_event(body):
                 reply_text = (
                     "📊 予約表構造の分析が完了しました！\n\n"
                     "画像を分析した結果、以下のような形式で記録されている可能性があります：\n\n"
-                    "■ 検出された時間帯：\n・18:00〜\n・18:30〜\n・19:00〜（など）\n\n"
+                    "■ 検出された時間帯（例）：\n・18:00〜\n・18:30〜\n・19:00〜 など\n\n"
                     "■ 記入項目：\n・名前またはイニシャル\n・人数（例：1人、2人、4人）\n・備考欄（自由記入、空欄もあり）\n\n"
                     "■ その他の特徴：\n・上部に日付（◯月◯日）記入欄あり\n・最下部に営業情報や注意事項が記載\n\n"
                     "このような構成で問題なければ、「はい」とご返信ください。\n"

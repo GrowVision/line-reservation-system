@@ -1,15 +1,16 @@
-# LINE予約管理BOT (Google Sheets 連携 + GPT-4o 画像解析)
+# LINE予約管理BOT (Google Sheets 連携 + GPT‑4o 画像解析)
 # -------------------------------------------------------------
 # このスクリプトは LINE Bot で受信したメッセージをもとに
 #   1. 店舗登録（店舗名・ID・座席数）
-#   2. 予約表スプレッドシートの自動生成
-#   3. 画像解析で予約行を抽出して "当日" シートに追記
+#   2. 空の予約表テンプレ画像を解析して時間枠を取得
+#   3. 取得した時間枠で予約表スプレッドシートを自動生成
+#   4. 予約表画像（記入済み）を解析して "当日" シートに追記
 # をワンストップで行います。
 # -------------------------------------------------------------
 """
 必要な環境変数（Render の Environment Variables で設定）
 ----------------------------------------------------------------
-OPENAI_API_KEY            : OpenAI GPT-4o の API キー
+OPENAI_API_KEY            : OpenAI GPT‑4o の API キー
 LINE_CHANNEL_ACCESS_TOKEN : LINE Messaging API のアクセストークン
 GOOGLE_SERVICE_ACCOUNT    : サービスアカウント JSON 全文（1 行で）
 MASTER_SHEET_NAME         : 契約店舗一覧シート名（省略時 "契約店舗一覧"）
@@ -22,7 +23,6 @@ import datetime as dt
 import json
 import os
 import random
-import threading
 from typing import Any, Dict, List
 
 import gspread
@@ -58,11 +58,10 @@ def _load_service_account(scope: List[str]):
     raw = os.getenv("GOOGLE_SERVICE_ACCOUNT") or os.getenv("GOOGLE_CREDENTIALS_JSON")
     if not raw:
         raise RuntimeError("環境変数 GOOGLE_SERVICE_ACCOUNT が設定されていません")
-    # Render の環境変数は 1 行文字列なのでそのまま json.loads 可能
     info = json.loads(raw)
     return ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
 
-SCOPES = [
+SCOPES    : List[str] = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
 ]
@@ -79,34 +78,44 @@ def _get_master_ws():
         sh = gs_client.open(MASTER_SHEET_NAME)
     except gspread.SpreadsheetNotFound:
         sh = gs_client.create(MASTER_SHEET_NAME)
-        sh.sheet1.append_row(["店舗名", "店舗ID", "座席数", "シートURL", "登録日時"])
+        sh.sheet1.append_row(["店舗名", "店舗ID", "座席数", "シートURL", "登録日時", "時間枠"])
     return sh.sheet1
 
-def create_store_sheet(store_name: str, store_id: int, seat_info: str) -> str:
-    """店舗用予約表スプレッドシートを生成して URL を返す"""
+
+def create_store_sheet(store_name: str, store_id: int, seat_info: str, times: List[str]) -> str:
+    """店舗用予約表スプレッドシートを生成して URL を返す。"""
     sh = gs_client.create(f"予約表 - {store_name} ({store_id})")
-    sh.share(None, perm_type="anyone", role="reader")  # URL で閲覧可（必要に応じて変更）
+    sh.share(None, perm_type="anyone", role="writer")  # URL 共有（必要に応じて変更）
     ws = sh.sheet1
-    ws.update([[
-        "月", "日", "時間帯", "名前", "人数", "備考"
-    ]])
+
+    # ヘッダー
+    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
+    if times:
+        ws.append_rows([["", "", t, "", "", ""] for t in times], value_input_option="USER_ENTERED")
+
     _get_master_ws().append_row([
         store_name,
         store_id,
         seat_info.replace("\n", " "),
         sh.url,
         dt.datetime.now().isoformat(timespec="seconds"),
+        ",".join(times),
     ])
     return sh.url
+
 
 def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]):
     if not rows:
         return
     ws = gs_client.open_by_url(sheet_url).sheet1
-    ws.append_rows([
-        [r.get(k, "") for k in ("month", "day", "time", "name", "size", "note")]
-        for r in rows
-    ], value_input_option="USER_ENTERED")
+
+    header   = ws.row_values(1)
+    col_idx  = header.index("時間帯") + 1 if "時間帯" in header else 3
+    existing = {ws.cell(r, col_idx).value: r for r in range(2, ws.row_count+1) if ws.cell(r, col_idx).value}
+
+    for r in rows:
+        target_row = existing.get(r.get("time")) or ws.row_count + 1
+        ws.update(f"A{target_row}:F{target_row}", [[r.get(k, "") for k in ("month","day","time","name","size","note")]])
 
 # -------------------------------------------------------------
 # LINE Messaging API ユーティリティ
@@ -124,7 +133,7 @@ def _line_reply(token: str, text: str):
     }, timeout=10)
 
 # -------------------------------------------------------------
-# Vision 解析
+# Vision 解析ユーティリティ
 # -------------------------------------------------------------
 
 def _download_line_image(message_id: str) -> bytes:
@@ -134,20 +143,43 @@ def _download_line_image(message_id: str) -> bytes:
     r.raise_for_status()
     return r.content
 
-def _vision_extract(img_bytes: bytes) -> List[Dict[str, Any]]:
-    b64 = base64.b64encode(img_bytes).decode()
-    prompt = [
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        {"type": "text", "text": (
-            "画像は飲食店の紙予約表です。行ごとに予約情報を抽出し、"
-            "JSON 配列で返してください。フォーマットは次に従います。\n"
-            "[{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
-        )},
-    ]
+
+def _vision_extract_times(img: bytes) -> List[str]:
+    """空欄テンプレ画像から時間帯を抽出"""
+    b64 = base64.b64encode(img).decode()
     res = client.chat.completions.create(
-        model="gpt-4o",  # Vision 対応モデル
-        messages=prompt,
-        response_format={"type": "json_object"},
+        model="gpt-4o",
+        messages=[
+            {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}},
+            {"type":"text","text":(
+                "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) をすべて抽出し、"
+                "昇順の JSON 配列で返してください。"
+            )}
+        ],
+        response_format={"type":"json_object"},
+        max_tokens=256,
+    )
+    try:
+        times = json.loads(res.choices[0].message.content)
+        return times if isinstance(times, list) else []
+    except Exception:
+        return []
+
+
+def _vision_extract_rows(img: bytes) -> List[Dict[str,Any]]:
+    """記入済み予約表から予約行を抽出"""
+    b64 = base64.b64encode(img).decode()
+    res = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{b64}"}},
+            {"type":"text","text":(
+                "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
+                "フォーマット: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\","
+                "\"name\":str,\"size\":int,\"note\":str}]"
+            )}
+        ],
+        response_format={"type":"json_object"},
         max_tokens=1024,
     )
     try:
@@ -156,88 +188,118 @@ def _vision_extract(img_bytes: bytes) -> List[Dict[str, Any]]:
         return []
 
 # -------------------------------------------------------------
-# Webhook ハンドラ
+# Webhook ハンドラー
 # -------------------------------------------------------------
 
-@app.route("/", methods=["POST", "GET", "HEAD"])
+@app.route("/", methods=["POST"])
 def webhook():
-    if request.method != "POST":
-        return "OK", 200
-    body = request.get_json(silent=True) or {}
+    body   = request.get_json()
     events = body.get("events", [])
-    if not events:
-        return "NO EVENT", 200
-    threading.Thread(target=_handle_event, args=(events[0],)).start()
-    return "OK", 200
+    for e in events:
+        handle_event(e)
+    return "OK"
 
-# -------------------------------------------------------------
-# 会話ステートマシン
-# -------------------------------------------------------------
 
-def _handle_event(ev: Dict[str, Any]):
-    if ev.get("type") != "message":
+def _init_state(uid:str):
+    user_state[uid] = {
+        "step"      : "wait_store_name",
+        "store_name" : "",
+        "store_id"   : random.randint(1000,9999),
+        "seat_info"  : "",
+        "times"      : [],
+        "sheet_url"  : "",
+    }
+
+
+def handle_event(event):
+    uid   = event["source"]["userId"]
+    mtype = event["message"]["type"]
+    token = event["replyToken"]
+
+    if uid not in user_state:
+        _init_state(uid)
+
+    st = user_state[uid]
+
+    # ---------------- 店舗登録フェーズ ----------------
+    if st["step"] == "wait_store_name" and mtype == "text":
+        st["store_name"] = event["message"]["text"].strip()
+        _line_reply(token,
+            f"\n店舗名を *{st['store_name']}* として登録します。\n\n問題なければ `はい`、訂正する場合は `いいえ` と返信してください。")
+        st["step"] = "confirm_store_name"
         return
 
-    uid        = ev["source"]["userId"]
-    mtype      = ev["message"]["type"]
-    token      = ev["replyToken"]
-    text       = ev["message"].get("text", "") if mtype == "text" else ""
-    state      = user_state.setdefault(uid, {"step": "store_name"})
-
-    # ---------- 店舗名入力 ----------
-    if state["step"] == "store_name" and mtype == "text":
-        store_name = text.strip()
-        store_id   = random.randint(100000, 999999)
-        state.update({"step": "confirm_store", "store_name": store_name, "store_id": store_id})
-        _line_reply(token, f"店舗名: {store_name}\n店舗ID: {store_id}\nこの内容でよろしいですか？ (はい/いいえ)")
-        return
-
-    # ---------- 店舗名確認 ----------
-    if state["step"] == "confirm_store" and mtype == "text":
-        if text.strip() == "はい":
-            state["step"] = "seat_input"
-            _line_reply(token, "座席数を入力してください (例: 1人席:3\n2人席:2\n4人席:1)")
+    if st["step"] == "confirm_store_name" and mtype == "text":
+        if event["message"]["text"].strip() == "はい":
+            _line_reply(token,
+                "座席数を教えてください。\n\n例:\n1人席: 3\n2人席: 2\n4人席: 1")
+            st["step"] = "wait_seat"
         else:
-            state["step"] = "store_name"
-            _line_reply(token, "では店舗名をもう一度入力してください。")
+            _line_reply(token, "もう一度店舗名を入力してください。")
+            st["step"] = "wait_store_name"
         return
 
-    # ---------- 座席数入力 ----------
-    if state["step"] == "seat_input" and mtype == "text":
-        state.update({"seat_info": text.strip(), "step": "create_sheet"})
-        sheet_url = create_store_sheet(state["store_name"], state["store_id"], state["seat_info"])
-        state.update({"sheet_url": sheet_url, "step": "wait_image"})
-        _line_reply(token, f"✅ 予約表スプレッドシートを作成しました！\n{sheet_url}\n\n予約表の画像を送ってください。")
+    if st["step"] == "wait_seat" and mtype == "text":
+        st["seat_info"] = event["message"]["text"].strip()
+        _line_reply(token,
+            "空の予約表テンプレート画像を送ってください。\n\n時間帯を自動で抽出します。")
+        st["step"] = "wait_template_img"
         return
 
-    # ---------- 画像受信 ----------
-    if state["step"] == "wait_image" and mtype == "image":
-        img_bytes         = _download_line_image(ev["message"]["id"])
-        extracted_rows    = _vision_extract(img_bytes)
-        state.update({"img_rows": extracted_rows, "step": "confirm_rows"})
-        preview_lines = "\n".join([f"{r.get('time','??')} {r.get('name','?')} {r.get('size','?')}名" for r in extracted_rows[:5]])
-        preview_lines = preview_lines or "(予約行が検出できませんでした)"
-        _line_reply(token, f"抽出した予約行の例:\n{preview_lines}\n\nこの内容で登録してよろしいですか？ (はい/いいえ)")
+    # -------- テンプレ画像解析フェーズ --------
+    if st["step"] == "wait_template_img" and mtype == "image":
+        img = _download_line_image(event["message"]["id"])
+        times = _vision_extract_times(img)
+        st["times"] = times
+        times_view = "\n".join(f"・{t}" for t in times) or "(検出できませんでした)"
+        _line_reply(token,
+            "📊 予約表構造の分析が完了しました！\n\n検出した時間帯:\n" + times_view +
+            "\n\nこの内容でスプレッドシートを作成してよろしいですか？ (はい / いいえ)")
+        st["step"] = "confirm_times"
         return
 
-    # ---------- 画像解析結果確認 ----------
-    if state["step"] == "confirm_rows" and mtype == "text":
-        if text.strip() == "はい":
-            append_reservations(state["sheet_url"], state.get("img_rows", []))
-            state["step"] = "done"
-            _line_reply(token, "✅ 予約表に登録しました！ご確認ください。")
+    if st["step"] == "confirm_times" and mtype == "text":
+        if event["message"]["text"].strip() == "はい":
+            url = create_store_sheet(st["store_name"], st["store_id"], st["seat_info"], st["times"])
+            st["sheet_url"] = url
+            _line_reply(token,
+                f"✅ スプレッドシートを作成しました！\n\nこちらからご確認ください:\n{url}\n\n次に、当日の予約表写真 (記入済み) を送ってください。")
+            st["step"] = "wait_filled_img"
         else:
-            state["step"] = "wait_image"
-            _line_reply(token, "了解しました。もう一度予約表の画像を送ってください。")
+            _line_reply(token, "テンプレ画像をもう一度送ってください。")
+            st["step"] = "wait_template_img"
         return
 
-    # ---------- その他 ----------
-    _line_reply(token, "メッセージを理解できませんでした。もう一度お試しください。")
+    # -------- 予約内容抽出フェーズ --------
+    if st["step"] == "wait_filled_img" and mtype == "image":
+        img   = _download_line_image(event["message"]["id"])
+        rows  = _vision_extract_rows(img)
+        if not rows:
+            _line_reply(token, "予約行を検出できませんでした。もう一度鮮明な写真を送ってください。")
+            return
+        preview = "\n".join(
+            f"{r.get('time','')}: {r.get('name','')} ({r.get('size','')}名)" for r in rows[:5]
+        )
+        _line_reply(token,
+            "抽出した予約内容 (先頭5件) :\n" + preview +
+            "\n\nこの内容でスプレッドシートに追記してよろしいですか？ (はい / いいえ)")
+        st["pending_rows"] = rows
+        st["step"] = "confirm_reservations"
+        return
 
-# -------------------------------------------------------------
-# ローカル実行用
-# -------------------------------------------------------------
+    if st["step"] == "confirm_reservations" and mtype == "text":
+        if event["message"]["text"].strip() == "はい":
+            append_reservations(st["sheet_url"], st.pop("pending_rows", []))
+            _line_reply(token, "✅ 予約内容をスプレッドシートに記録しました！ ありがとうございます。")
+            st["step"] = "done"
+        else:
+            _line_reply(token, "内容を破棄しました。もう一度当日の予約表画像を送ってください。")
+            st["step"] = "wait_filled_img"
+        return
+
+    # -------- デフォルト応答 --------
+    _line_reply(token, "メッセージを理解できませんでした。メニューに従って操作してください。")
+
 
 if __name__ == "__main__":
-    # Flask のデバッグサーバー
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=True)

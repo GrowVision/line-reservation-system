@@ -160,7 +160,6 @@ def _vision_request(messages: List[Dict[str, Any]], max_tokens: int = 512):
     return client.chat.completions.create(
         model="gpt-4o",
         messages=messages,
-        response_format={"type": "json_object"},
         max_tokens=max_tokens,
         temperature=0.0,
     )

@@ -168,13 +168,21 @@ def _vision_request(messages: List[Dict[str, Any]], max_tokens: int = 512):
 
 def _vision_extract_times(img: bytes) -> List[str]:
     b64 = base64.b64encode(img).decode()
-    task = "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) をすべて昇順で JSON 配列として返してください。"
+    task = (
+        "画像は空欄の飲食店予約表です。"
+        "予約可能な時間帯 (HH:MM) を、左上→右下の順にすべて抽出し、"
+        "重複なく昇順で JSON 配列として返してください。"
+    )
     res = _vision_request(_make_image_prompt(b64, task), 256)
+
     try:
+        # GPT-4o の返信（例: ["18:00","18:30","19:00"]）をそのまま取り出す
         data = json.loads(res.choices[0].message.content)
         return [str(t) for t in data] if isinstance(data, list) else []
     except Exception:
+        # パース失敗時は空リストを返して calling 側で「解析失敗」のメッセージを出す
         return []
+
 
 
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:

@@ -1,4 +1,4 @@
-# ✅ LINE予約管理BOT（一覧確認・柔軟入力対応版）
+# ✅ LINE予約管理BOT（一覧確認・柔軟入力対応版 + スプレッドシート作成連携）
 from flask import Flask, request
 import os
 import requests
@@ -9,6 +9,7 @@ import json
 from dotenv import load_dotenv
 from openai import OpenAI
 from oauth2client.service_account import ServiceAccountCredentials
+import gspread
 
 app = Flask(__name__)
 load_dotenv()
@@ -19,6 +20,17 @@ GOOGLE_SERVICE_ACCOUNT = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 user_state = {}
+
+# Google Sheets 認証設定
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_SERVICE_ACCOUNT), scope)
+gs_client = gspread.authorize(creds)
+
+def create_spreadsheet(store_name, store_id):
+    spreadsheet = gs_client.create(f"予約表 - {store_name} ({store_id})")
+    worksheet = spreadsheet.sheet1
+    worksheet.update("A1", [["月", "日", "時間帯", "名前", "人数", "備考"]])
+    return spreadsheet.url
 
 @app.route("/", methods=['GET', 'HEAD', 'POST'])
 def webhook():
@@ -90,6 +102,10 @@ def handle_event(body):
 
             elif state["step"] == "confirm_seats":
                 if "はい" in user_message:
+                    store_name = user_state[user_id]["store_name"]
+                    store_id = user_state[user_id]["store_id"]
+                    sheet_url = create_spreadsheet(store_name, store_id)
+                    user_state[user_id]["spreadsheet_url"] = sheet_url
                     reply_text = (
                         "ありがとうございます！\n"
                         "店舗登録が完了しました🎉\n\n"
@@ -108,7 +124,7 @@ def handle_event(body):
             elif state["step"] == "confirm_structure":
                 if "はい" in user_message:
                     reply_text = "ありがとうございます！認識内容をもとに、予約表の記録フォーマットを作成します。しばらくお待ちください..."
-                    user_state[user_id]["step"] = "generate_spreadsheet"
+                    user_state[user_id]["step"] = "completed"
                 elif "いいえ" in user_message:
                     reply_text = (
                         "ご指摘ありがとうございます！\n\n"
@@ -129,9 +145,6 @@ def handle_event(body):
                     f"この内容で問題なければ「はい」、\nまだ修正が必要であれば「いいえ」とご返信ください。"
                 )
                 user_state[user_id]["step"] = "confirm_structure"
-
-            elif state["step"] == "wait_for_image":
-                reply_text = "予約表画像を受信しました。\n現在、AIがフォーマットを解析中です。しばらくお待ちください..."
 
             else:
                 reply_text = "画像を送ると、AIが予約状況を読み取ってお返事します！"

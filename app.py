@@ -37,7 +37,8 @@ MODEL_TEXT   = "models/gemini-1.5-pro-latest"
 MODEL_VISION = "models/gemini-1.5-pro-latest"
 
 # 初期設定
-genai.configure(api_key=GEMINI_API_KEY)
+# 初期設定
+client = genai.Client(api_key=GEMINI_API_KEY)
 app = Flask(__name__)
 user_state: Dict[str, Dict[str, Any]] = {}
 

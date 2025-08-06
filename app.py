@@ -7,12 +7,16 @@ import random
 import threading
 from typing import Any, Dict, List
 
-import google.generativeai as genai          # Gemini SDK
+# 新SDK のインポート
+from google import genai
+from google.genai import types
+
 import gspread
 import requests
 from dotenv import load_dotenv
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
+
 
 # -------------------------------------------------------------
 # 0. 環境変数 & Gemini モデル ID

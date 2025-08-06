@@ -1,11 +1,3 @@
-# LINE予約管理 BOT  ── Gemini + Google Sheets 版
-# -------------------------------------------------------------
-# 1️⃣  店舗登録（店舗名・ID・座席数）
-# 2️⃣  空の予約表テンプレ画像 → 時間枠抽出
-# 3️⃣  店舗専用スプレッドシート自動生成
-# 4️⃣  記入済み予約表画像 → 当日シートに追記
-# -------------------------------------------------------------
-
 from __future__ import annotations
 import base64, datetime as dt, json, os, random, threading
 from typing import Any, Dict, List
@@ -57,7 +49,7 @@ def _get_master_ws():
 
 def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str]) -> str:
     sh = gs.create(f"予約表 - {name} ({store_id})")
-    sh.share(None, perm_type="anyone", role="writer")         # 必要に応じて権限制御
+    sh.share(None, perm_type="anyone", role="writer")
     ws = sh.sheet1
     ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
@@ -67,20 +59,6 @@ def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str
         dt.datetime.now().isoformat(timespec="seconds"), ",".join(times)
     ])
     return sh.url
-
-def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]):
-    if not rows:
-        return
-    ws      = gs.open_by_url(sheet_url).sheet1
-    header  = ws.row_values(1)
-    col_tm  = header.index("時間帯") + 1 if "時間帯" in header else 3
-    existing = {ws.cell(r, col_tm).value: r for r in range(2, ws.row_count + 1) if ws.cell(r, col_tm).value}
-    for r in rows:
-        tgt = existing.get(r.get("time")) or ws.row_count + 1
-        ws.update(
-            f"A{tgt}:F{tgt}",
-            [[r.get(k, "") for k in ("month", "day", "time", "name", "size", "note")]]
-        )
 
 # -------------------------------------------------------------
 # 3. LINE 返信ユーティリティ
@@ -125,9 +103,23 @@ def _gemini_vision(img_b64: str, prompt: str, max_t: int = 1024) -> str:
 # -------------------------------------------------------------
 # 5. 画像解析
 # -------------------------------------------------------------
+def _vision_describe_sheet(img: bytes) -> str:
+    prompt = (
+        "画像は、手書きで記入するための予約表です。以下のように簡潔に構成をまとめてください：\n"
+        "- 表のタイトル\n"
+        "- 日付欄\n"
+        "- 列の構成（時間帯、名前、人数、卓番など）\n"
+        "- 注意書きの内容\n"
+        "- テーブル番号の使い分け\n"
+        "例：「この画像は、手書きで記入するための予約表です。\n表の構成: ...」"
+    )
+    return _gemini_vision(base64.b64encode(img).decode(), prompt, 1024).strip()
+
 def _vision_extract_times(img: bytes) -> List[str]:
-    prompt = ("画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
-              "左上→右下の順に重複なく昇順で JSON 配列として返してください。")
+    prompt = (
+        "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
+        "左上→右下の順に重複なく昇順で JSON 配列として返してください。"
+    )
     try:
         data = json.loads(_gemini_vision(base64.b64encode(img).decode(), prompt, 256))
         return [str(t) for t in data] if isinstance(data, list) else []
@@ -135,9 +127,11 @@ def _vision_extract_times(img: bytes) -> List[str]:
         return []
 
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
-    prompt = ("画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
-              "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\","
-              "\"name\":str,\"size\":int,\"note\":str}]")
+    prompt = (
+        "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
+        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\","\
+        "name\":str,\"size\":int,\"note\":str}]"
+    )
     try:
         data = json.loads(_gemini_vision(base64.b64encode(img).decode(), prompt, 2048))
         return data if isinstance(data, list) else []
@@ -155,23 +149,18 @@ def _download_line_img(msg_id: str) -> bytes:
 # -------------------------------------------------------------
 def _process_template(uid: str, msg_id: str):
     st = user_state.get(uid)
-    if not st or st["step"] != "wait_template_img":
+    if not st or st.get("step") != "wait_template_img":
         return
-    img   = _download_line_img(msg_id)
-    times = _vision_extract_times(img)
-    if not times:
-        _line_push(uid, "画像の解析に失敗しました。鮮明な『空欄の予約表』画像をもう一度お送りください。")
-        return
-    st["times"] = times
-    st["step"]  = "confirm_times"
+    img = _download_line_img(msg_id)
+    desc = _vision_describe_sheet(img)
+    st["template_img"] = img
+    st["step"] = "confirm_template"
     _line_push(uid,
-        "📊 予約表構造の分析が完了しました！\n\n"
-        "検出された時間帯：\n" + "\n".join(f"・{t}〜" for t in times) + "\n\n"
-        "この内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
+        f"{desc}\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
 
 def _process_filled(uid: str, msg_id: str):
     st = user_state.get(uid)
-    if not st or st["step"] != "wait_filled_img":
+    if not st or st.get("step") != "wait_filled_img":
         return
     img  = _download_line_img(msg_id)
     rows = _vision_extract_rows(img)
@@ -199,19 +188,18 @@ def webhook():
 # -------------------------------------------------------------
 def _handle_event(event: Dict[str, Any]):
     try:
-        if event["type"] != "message":
+        if event.get("type") != "message":
             return
-        uid      = event["source"]["userId"]
-        token    = event["replyToken"]
-        mtype    = event["message"]["type"]
-        text     = event["message"].get("text", "")
-        msg_id   = event["message"].get("id", "")
-        st       = user_state.setdefault(uid, {"step": "start"})
-        step     = st["step"]
+        uid    = event["source"]["userId"]
+        token  = event.get("replyToken", "")
+        mtype  = event["message"]["type"]
+        text   = event["message"].get("text", "")
+        msg_id = event["message"].get("id", "")
+        st     = user_state.setdefault(uid, {"step": "start"})
+        step   = st.get("step")
 
-        # ---------- TEXT ----------
+        # TEXT メッセージ
         if mtype == "text":
-
             # ① 店舗名登録
             if step == "start":
                 store_name = _gemini_text(f"以下の文から店舗名だけを抽出してください：\n{text}", 64)
@@ -237,8 +225,8 @@ def _handle_event(event: Dict[str, Any]):
             # ③ 座席数入力
             if step == "ask_seats":
                 seat_info = _gemini_text(
-                    "以下の文から 1人席, 2人席, 4人席 の数を抽出し、"
-                    "次の形式で出力してください:\n1人席: ◯席\n2人席: ◯席\n4人席: ◯席\n\n" + text,
+                    "以下の文から 1人席, 2人席, 4人席 の数を抽出し、次の形式で出力してください:\n"
+                    "1人席: ◯席\n2人席: ◯席\n4人席: ◯席\n\n" + text,
                     128
                 )
                 st.update({"seat_info": seat_info, "step": "confirm_seats"})
@@ -265,11 +253,18 @@ def _handle_event(event: Dict[str, Any]):
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
-            # ⑤ 時間枠確認
-            if step == "confirm_times":
+            # ⑤ テンプレート構成確認
+            if step == "confirm_template":
                 if "はい" in text:
+                    img = st.pop("template_img")
+                    times = _vision_extract_times(img)
+                    if not times:
+                        _line_reply(token, "時間枠が検出できませんでした。鮮明な『空欄の予約表』画像をもう一度お送りください。")
+                        st["step"] = "wait_template_img"
+                        return
+                    st["times"] = times
                     st["sheet_url"] = create_store_sheet(
-                        st["store_name"], st["store_id"], st["seat_info"], st["times"])
+                        st["store_name"], st["store_id"], st["seat_info"], times)
                     st["step"] = "wait_filled_img"
                     _line_reply(token,
                         "スプレッドシートを作成しました！\n"
@@ -282,7 +277,7 @@ def _handle_event(event: Dict[str, Any]):
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
-        # ---------- IMAGE ----------
+        # IMAGE メッセージ
         if mtype == "image":
             if step == "wait_template_img":
                 threading.Thread(target=_process_template, args=(uid, msg_id)).start()

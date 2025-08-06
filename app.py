@@ -168,7 +168,7 @@ def _vision_describe_sheet(img: bytes) -> str:
                 types.Part.from_bytes(data=img, mime_type="image/jpeg"),
                 types.Part.from_text(text=prompt)
             ],
-            generation_config={"max_output_tokens": 1024}
+            max_output_tokens=1024
         )
         print(f"[_vision_describe_sheet] result = {response.text}")
         return response.text.strip()

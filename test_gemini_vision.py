@@ -22,15 +22,18 @@ prompt = (
 )
 
 # 4) SDK 呼び出し（types.Part を利用）
-try:
-    response = client.models.generate_content(
-        model="models/gemini-1.5-pro-latest",
-        contents=[
-            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
-            types.Part.from_text(prompt)
-        ],
-        generation_config={"max_output_tokens": 1024}
-    )
+# test_gemini_vision.py
+ try:
+     response = client.models.generate_content(
+         model="models/gemini-1.5-pro-latest",
+         contents=[
+             types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+-            types.Part.from_text(prompt)
++            types.Part.from_text(text=prompt)
+         ],
+         generation_config={"max_output_tokens": 1024}
+     )
+
     print("=== SDK 呼び出し 成功 ===")
     print("レスポンス全体：", response)
     print("要約テキスト：", response.text)

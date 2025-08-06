@@ -1,15 +1,15 @@
+# test_gemini_vision.py
 import os
-import base64
-import google.generativeai as genai
-from google.generativeai import types   # ← ここを追加
+from google import genai
+from google.genai import types
 
-# 1) APIキー設定
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+# 1) クライアント初期化
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-# 2) 画像読み込み＆Base64化
+# 2) 画像読み込み
 with open("sample_reservation_form.jpg", "rb") as f:
     img_bytes = f.read()
-print(f"[TEST] Raw image bytes: {len(img_bytes)}")
+print(f"[TEST] 画像バイト数: {len(img_bytes)}")
 
 # 3) プロンプト定義
 prompt = (
@@ -21,18 +21,19 @@ prompt = (
     "- テーブル番号の使い分け"
 )
 
-# 4) SDK 呼び出し（型オブジェクトを使う）
+# 4) SDK 呼び出し
 try:
-    res = genai.GenerativeModel("models/gemini-1.5-pro-latest").generate_content(
-        [
-            types.Image(blob=img_bytes, mime_type="image/jpeg"),  # ← ここ
-            types.Text(text=prompt)                               # ← ここ
+    response = client.models.generate_content(
+        model="models/gemini-1.5-pro-latest",
+        contents=[
+            types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"),
+            types.Part.from_text(prompt)
         ],
         generation_config={"max_output_tokens": 1024}
     )
     print("=== SDK 呼び出し 成功 ===")
-    print("Full response object:", res)
-    print("Text output:", res.text)
+    print("レスポンス全体：", response)
+    print("要約テキスト：", response.text)
 except Exception as e:
     print("=== SDK 呼び出し エラー ===")
     print(e)

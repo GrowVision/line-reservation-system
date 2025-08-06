@@ -82,6 +82,7 @@ def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str
     ])
     return sh.url
 
+
 def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]) -> None:
     sh = gs.open_by_url(sheet_url)
     ws = sh.sheet1
@@ -115,7 +116,7 @@ def _line_push(uid: str, text: str):
     )
 
 # -------------------------------------------------------------
-# Gemini 呼び出しヘルパ (1.5 Vision 向け修正版)
+# Gemini 呼び出しヘルパ (1.5 Vision 向け)
 # -------------------------------------------------------------
 def _gemini_text(prompt: str, max_t: int = 256) -> str:
     res = genai.GenerativeModel(MODEL_TEXT).generate_content(
@@ -126,9 +127,7 @@ def _gemini_text(prompt: str, max_t: int = 256) -> str:
     return res.text.strip()
 
 def _gemini_vision(img: bytes, prompt: str, max_t: int = 1024) -> str:
-    # 1. バイト列を Base64 にエンコード
     img_b64 = base64.b64encode(img).decode()
-    # 2. 辞書形式で contents を構築
     contents = [
         {"type": "image", "data": img_b64, "mime_type": "image/jpeg"},
         {"type": "text",  "text": prompt}
@@ -231,6 +230,77 @@ def _process_filled(uid: str, msg_id: str):
     _line_push(uid, "✅ 予約情報をスプレッドシートに追記しました！")
 
 # -------------------------------------------------------------
+# メインイベントハンドラ
+# -------------------------------------------------------------
+def _handle_event(event: Dict[str, Any]):
+    try:
+        if event.get("type") != "message":
+            return
+        uid    = event["source"]["userId"]
+        token  = event.get("replyToken", "")
+        mtype  = event["message"]["type"]
+        text   = event["message"].get("text", "")
+        msg_id = event["message"].get("id", "")
+        st     = user_state.setdefault(uid, {"step": "start"})
+        step   = st.get("step")
+
+        # 解析状況問い合わせ対応
+        if mtype == "text" and "まだ分析" in text:
+            _line_reply(token, "まだ解析中です。しばらくお待ちください。解析できない場合は再度画像を送ってください。")
+            return
+
+        # テキストメッセージ処理
+        if mtype == "text":
+            if step == "start":
+                name = _gemini_text(f"以下の文から店舗名だけを抽出してください：\n{text}", 64)
+                sid  = random.randint(100000, 999999)
+                st.update({"step": "confirm_store", "store_name": name, "store_id": sid})
+                _line_reply(token, f"登録完了：店舗名：{name}\n店舗ID：{sid}\nこの内容で間違いないですか？（はい／いいえ）")
+                return
+            if step == "confirm_store":
+                if "はい" in text:
+                    st["step"] = "ask_seats"
+                    _line_reply(token, "座席数を入力してください (例: 1人席:3 2人席:2 4人席:1)")
+                elif "いいえ" in text:
+                    st.clear(); st["step"] = "start"
+                    _line_reply(token, "店舗名をもう一度送ってください。")
+                else:
+                    _line_reply(token, "「はい」または「いいえ」で答えてください。")
+                return
+            if step == "ask_seats":
+                info = _gemini_text(
+                    f"以下の文から 1人席, 2人席, 4人席 の数を抽出し、\n1人席:◯席\n2人席:◯席\n4人席:◯席 の形式で出力してください。\n{text}",
+                    128
+                )
+                st.update({"seat_info": info, "step": "confirm_seats"})
+                _line_reply(token, f"座席数確認：\n{info}\nこの内容で登録しますか？（はい／いいえ）")
+                return
+            if step == "confirm_seats":
+                if "はい" in text:
+                    st["step"] = "wait_template_img"
+                    _line_reply(token, "空欄の予約表の写真を送ってください。解析します…")
+                elif "いいえ" in text:
+                    st["step"] = "ask_seats"
+                    _line_reply(token, "座席数を再度入力してください。")
+                else:
+                    _line_reply(token, "「はい」または「いいえ」で答えてください。")
+                return
+        # 画像メッセージ処理
+        if mtype == "image":
+            if step == "wait_template_img":
+                threading.Thread(target=_process_template, args=(uid, msg_id)).start()
+                _line_reply(token, "画像受信。解析中です…")
+                return
+            if step == "wait_filled_img":
+                threading.Thread(target=_process_filled, args=(uid, msg_id)).start()
+                _line_reply(token, "画像受信。予約情報抽出中…")
+                return
+            _line_reply(token, "画像受信しましたが、解析できない状態です。")
+    except Exception as e:
+        print(f"[handle_event error] {e}")
+        _line_reply(event.get("replyToken", ""), "エラーが発生しました。もう一度お試しください。")
+
+# -------------------------------------------------------------
 # Webhook
 # -------------------------------------------------------------
 @app.route("/", methods=["GET", "HEAD", "POST"])
@@ -240,10 +310,7 @@ def webhook():
     body = request.get_json(force=True, silent=True) or {}
     if not body.get("events"):
         return "NOEVENT", 200
-    threading.Thread(
-        target=_handle_event,
-        args=(body["events"][0],)
-    ).start()
+    threading.Thread(target=_handle_event, args=(body["events"][0],)).start()
     return "OK", 200
 
 # -------------------------------------------------------------

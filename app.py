@@ -1,66 +1,60 @@
 # -------------------------------------------------------------
-# LINE 予約管理 BOT 〈Gemini 版〉
-#   1. 店舗登録（店舗名・ID・座席数）
-#   2. 予約表テンプレ画像の解析（時間枠抽出）
-#   3. Google Sheets に店舗専用シートを自動生成
-#   4. 記入済み画像を解析し当日シートへ追記
+#  LINE 予約管理 BOT  (Gemini + Google Sheets)
+#  1. 店舗登録       2. 空予約表テンプレ画像→時間枠抽出
+#  3. スプレッドシート自動生成  4. 記入済み画像→当日シート追記
 # -------------------------------------------------------------
-"""
-必要な Render 環境変数
-----------------------------------------------------------------
-GEMINI_API_KEY               : Google AI Studio で発行したキー
-LINE_CHANNEL_ACCESS_TOKEN    : LINE Messaging API アクセストークン
-GOOGLE_CREDENTIALS_JSON      : サービスアカウント JSON 全文（1行）
-MASTER_SHEET_NAME（任意）     : 店舗一覧シート名（デフォルト '契約店舗一覧'）
-"""
 from __future__ import annotations
 
-# ---------- 標準 / 外部ライブラリ ----------
 import base64
 import datetime as dt
 import json
 import os
 import random
 import threading
+import traceback
 from typing import Any, Dict, List
 
-import requests
 import gspread
-from flask import Flask, request
+import google.generativeai as genai
+import requests
 from dotenv import load_dotenv
+from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
-import google.generativeai as genai      # ★ Gemini SDK
 
-# ---------- Flask & 基本設定 ----------
-app = Flask(__name__)
+# -------------------------------------------------------------
+#   環境変数
+# -------------------------------------------------------------
 load_dotenv()
 
-# --- LINE & Gemini キー読み込み ---
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 GEMINI_API_KEY            = os.getenv("GEMINI_API_KEY")
 MASTER_SHEET_NAME         = os.getenv("MASTER_SHEET_NAME", "契約店舗一覧")
 
 if not (LINE_CHANNEL_ACCESS_TOKEN and GEMINI_API_KEY):
-    raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN と GEMINI_API_KEY を必ず設定してください")
+    raise RuntimeError("LINE_CHANNEL_ACCESS_TOKEN または GEMINI_API_KEY が未設定です")
 
 genai.configure(api_key=GEMINI_API_KEY)
-model_chat   = genai.GenerativeModel("gemini-pro")        # テキスト用
-model_vision = genai.GenerativeModel("gemini-pro-vision") # 画像用（試用枠内で利用可）
 
+# -------------------------------------------------------------
+#   Flask アプリ
+# -------------------------------------------------------------
+app = Flask(__name__)
 user_state: Dict[str, Dict[str, Any]] = {}
 
-# ---------- Google Sheets 認証 ----------
-def _load_sa(scopes: List[str]):
-    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+# -------------------------------------------------------------
+#   Google Sheets 認証
+# -------------------------------------------------------------
+def _load_service_account(scope: List[str]):
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_SERVICE_ACCOUNT")
     if not raw:
-        raise RuntimeError("環境変数 GOOGLE_CREDENTIALS_JSON がありません")
-    return ServiceAccountCredentials.from_json_keyfile_dict(json.loads(raw), scopes)
+        raise RuntimeError("サービスアカウント JSON が環境変数に設定されていません")
+    return ServiceAccountCredentials.from_json_keyfile_dict(json.loads(raw), scope)
 
 SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive",
 ]
-gs_client = gspread.authorize(_load_sa(SCOPES))
+gs_client = gspread.authorize(_load_service_account(SCOPES))
 
 def _get_master_ws():
     try:
@@ -70,35 +64,21 @@ def _get_master_ws():
         sh.sheet1.append_row(["店舗名", "店舗ID", "座席数", "シートURL", "登録日時", "時間枠"])
     return sh.sheet1
 
-# ---------- LINE ユーティリティ ----------
-def _line_reply(token: str, text: str):
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    body = {"replyToken": token, "messages": [{"type": "text", "text": text}]}
-    requests.post("https://api.line.me/v2/bot/message/reply", headers=headers, json=body, timeout=10)
-
-def _line_push(uid: str, text: str):
-    headers = {
-        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    body = {"to": uid, "messages": [{"type": "text", "text": text}]}
-    requests.post("https://api.line.me/v2/bot/message/push", headers=headers, json=body, timeout=10)
-
-# ---------- Sheets 操作 ----------
-def create_store_sheet(store: str, store_id: int, seats: str, times: List[str]) -> str:
-    sh = gs_client.create(f"予約表 - {store} ({store_id})")
-    sh.share(None, perm_type="anyone", role="writer")  # 任意で変更
+def create_store_sheet(store_name: str, store_id: int, seat_info: str, times: List[str]) -> str:
+    sh = gs_client.create(f"予約表 - {store_name} ({store_id})")
+    sh.share(None, perm_type="anyone", role="writer")          # 必要なら権限制御を調整
     ws = sh.sheet1
     ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
-        ws.append_rows([["", "", t, "", "", ""] for t in times])
+        ws.append_rows([["", "", t, "", "", ""] for t in times], value_input_option="USER_ENTERED")
+
     _get_master_ws().append_row([
-        store, store_id, seats.replace("\n", " "),
-        sh.url, dt.datetime.now().isoformat(timespec="seconds"),
-        ",".join(times)
+        store_name,
+        store_id,
+        seat_info.replace("\n", " "),
+        sh.url,
+        dt.datetime.now().isoformat(timespec="seconds"),
+        ",".join(times),
     ])
     return sh.url
 
@@ -107,201 +87,243 @@ def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]):
         return
     ws = gs_client.open_by_url(sheet_url).sheet1
     header = ws.row_values(1)
-    col_time = header.index("時間帯") + 1
-    exist = {ws.cell(r, col_time).value: r for r in range(2, ws.row_count + 1)
-             if ws.cell(r, col_time).value}
+    col_idx = header.index("時間帯") + 1 if "時間帯" in header else 3
+    existing = {ws.cell(r, col_idx).value: r for r in range(2, ws.row_count + 1) if ws.cell(r, col_idx).value}
     for r in rows:
-        idx = exist.get(r["time"]) or ws.row_count + 1
+        tgt = existing.get(r.get("time")) or ws.row_count + 1
         ws.update(
-            f"A{idx}:F{idx}",
+            f"A{tgt}:F{tgt}",
             [[r.get(k, "") for k in ("month", "day", "time", "name", "size", "note")]],
         )
 
-# ---------- LINE 画像ダウンロード ----------
-def _line_image_blob(message_id: str) -> bytes:
+# -------------------------------------------------------------
+#   LINE 送受信ユーティリティ
+# -------------------------------------------------------------
+def _line_reply(token: str, text: str):
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    requests.post(
+        "https://api.line.me/v2/bot/message/reply",
+        headers=headers,
+        json={"replyToken": token, "messages": [{"type": "text", "text": text}]},
+        timeout=10
+    )
+
+def _line_push(uid: str, text: str):
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    requests.post(
+        "https://api.line.me/v2/bot/message/push",
+        headers=headers,
+        json={"to": uid, "messages": [{"type": "text", "text": text}]},
+        timeout=10
+    )
+
+def _download_line_image(message_id: str) -> bytes:
     url = f"https://api-data.line.me/v2/bot/message/{message_id}/content"
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}
-    res = requests.get(url, headers=headers, timeout=15)
-    res.raise_for_status()
-    return res.content
+    r = requests.get(url, headers=headers, timeout=15)
+    r.raise_for_status()
+    return r.content
 
-# ---------- Gemini Vision 解析 ----------
-def _vision_times(img: bytes) -> List[str]:
-    b64 = base64.b64encode(img).decode()
-    prompt = (
-        "画像は空欄の飲食店予約表です。予約可能な時間帯（HH:MM）を左上→右下の順で重複なく昇順 JSON 配列で返してください。"
-    )
-    res = model_vision.generate_content(
+# -------------------------------------------------------------
+#   Gemini Vision ラッパ
+# -------------------------------------------------------------
+def _vision_request(img_b64: str, prompt: str, max_tokens: int = 2048):
+    model = genai.GenerativeModel("gemini-pro-vision")
+    res = model.generate_content(
         [
-            prompt,
-            genai.types.upload_pb2.FileData(mime_type="image/jpeg", data=img)
-        ]
+            {"type": "image", "data": img_b64, "mime_type": "image/jpeg"},
+            {"type": "text",  "text": prompt}
+        ],
+        generation_config={"max_output_tokens": max_tokens}
+    )
+    return res.text           # → str
+
+def _vision_extract_times(img: bytes) -> List[str]:
+    task = (
+        "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
+        "左上→右下の順で重複なく抽出し、JSON 配列として返してください。"
     )
     try:
-        return [str(t) for t in json.loads(res.text)]
+        data = json.loads(_vision_request(base64.b64encode(img).decode(), task, 512))
+        return [str(t) for t in data] if isinstance(data, list) else []
     except Exception:
         return []
 
-def _vision_rows(img: bytes) -> List[Dict[str, Any]]:
-    prompt = (
-        "画像は手書きで記入済みの予約表です。各行を次の JSON 配列形式で返してください："
-        '[{"month":int,"day":int,"time":"HH:MM","name":"...","size":int,"note":"..."}]'
-    )
-    res = model_vision.generate_content(
-        [
-            prompt,
-            genai.types.upload_pb2.FileData(mime_type="image/jpeg", data=img)
-        ]
+def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
+    task = (
+        "画像は手書きの予約表です。各行の予約情報を次の JSON 配列で返してください。\n"
+        '例: [{"month":8,"day":6,"time":"18:00","name":"山田","size":2,"note":""}]'
     )
     try:
-        return json.loads(res.text)
+        data = json.loads(_vision_request(base64.b64encode(img).decode(), task, 1024))
+        return data if isinstance(data, list) else []
     except Exception:
         return []
 
-# ---------- 画像解析処理スレッド ----------
-def _process_template(uid: str, message_id: str):
-    st = user_state.get(uid)
-    if not st or st["step"] != "wait_template":
-        return
+# -------------------------------------------------------------
+#   画像処理スレッド
+# -------------------------------------------------------------
+def _process_template_image(uid: str, mid: str):
     try:
-        img   = _line_image_blob(message_id)
-        times = _vision_times(img)
+        img   = _download_line_image(mid)
+        times = _vision_extract_times(img)
         if not times:
-            _line_push(uid, "画像の解析に失敗しました。もう一度鮮明な『空欄の予約表』画像を送ってください。")
+            _line_push(uid, "画像の解析に失敗しました。もう一度、鮮明な『空欄の予約表』の写真を送ってください。")
             return
-        st["times"] = times
-        st["step"]  = "confirm_times"
-        _line_push(uid,
-            "📊 予約表の時間枠を検出しました！\n\n" +
-            "\n".join(f"・{t}〜" for t in times) +
-            "\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
+        st = user_state[uid]
+        st.update({"times": times, "step": "confirm_times"})
+        _line_push(
+            uid,
+            "📊 予約表構造の分析が完了しました！\n\n"
+            "検出した時間帯：\n" + "\n".join(f"・{t}" for t in times) +
+            "\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）"
+        )
     except Exception as e:
-        print("[template-img error]", e)
+        traceback.print_exc()
         _line_push(uid, "画像解析中にエラーが発生しました。再度お試しください。")
 
-def _process_filled(uid: str, message_id: str):
-    st = user_state.get(uid)
-    if not st or st["step"] != "wait_filled":
-        return
+def _process_filled_image(uid: str, mid: str):
     try:
-        img  = _line_image_blob(message_id)
-        rows = _vision_rows(img)
+        img  = _download_line_image(mid)
+        rows = _vision_extract_rows(img)
         if not rows:
-            _line_push(uid, "予約内容を検出できませんでした。もう一度鮮明な画像を送ってください。")
+            _line_push(uid, "予約情報が検出できませんでした。もう一度、鮮明な画像を送ってください。")
             return
-        append_reservations(st["sheet_url"], rows)
+        append_reservations(user_state[uid]["sheet_url"], rows)
         _line_push(uid, "✅ 予約情報をスプレッドシートに追記しました！")
-    except Exception as e:
-        print("[filled-img error]", e)
+    except Exception:
+        traceback.print_exc()
         _line_push(uid, "画像解析中にエラーが発生しました。再度お試しください。")
 
-# ---------- Webhook ----------
+# -------------------------------------------------------------
+#   Webhook エンドポイント
+# -------------------------------------------------------------
 @app.route("/", methods=["GET", "HEAD", "POST"])
 def webhook():
     if request.method in {"GET", "HEAD"}:
         return "OK", 200
-    evt = request.get_json().get("events", [])
-    if not evt:
+    body = request.get_json()
+    if not body.get("events"):
         return "NOEVENT", 200
-    threading.Thread(target=_handle_event, args=(evt[0],)).start()
+    threading.Thread(target=_handle_event, args=(body["events"][0],)).start()
     return "OK", 200
 
-def _handle_event(ev: Dict[str, Any]):
+# -------------------------------------------------------------
+#   イベントハンドラ
+# -------------------------------------------------------------
+def _handle_event(event: Dict[str, Any]):
     try:
-        if ev["type"] != "message":
+        if event["type"] != "message":
             return
-        uid    = ev["source"]["userId"]
-        token  = ev["replyToken"]
-        mtype  = ev["message"]["type"]
-        text   = ev["message"].get("text", "")
-        mid    = ev["message"].get("id")
+        uid      = event["source"]["userId"]
+        token    = event["replyToken"]
+        msg_type = event["message"]["type"]
+        text     = event["message"].get("text", "")
+        mid      = event["message"].get("id")
 
-        st = user_state.setdefault(uid, {"step": "start"})
+        state = user_state.setdefault(uid, {"step": "start"})
+        step  = state["step"]
 
-        # ---------- TEXT ----------
-        if mtype == "text":
-            step = st["step"]
-
+        # ---------------- TEXT ----------------
+        if msg_type == "text":
+            # ① 店舗名登録
             if step == "start":
-                prompt = f"以下の文から店舗名だけを抽出してください：\n{text}"
-                store  = model_chat.generate_content(prompt).text.strip()
-                st.update({"step": "confirm_store", "store": store, "sid": random.randint(100000, 999999)})
+                prompt   = f"以下の文から店舗名だけを抽出してください：\n{text}"
+                store_name = genai.GenerativeModel("gemini-pro").generate_content(prompt).text.strip()
+                store_id   = random.randint(100000, 999999)
+                state.update({"step": "confirm_store", "store_name": store_name, "store_id": store_id})
                 _line_reply(token,
-                    f"登録完了：店舗名：{store} 店舗ID：{st['sid']}\n\n"
-                    "この内容で間違いないですか？「はい」「いいえ」でお答えください。")
+                    f"登録完了：店舗名：{store_name}\n店舗ID：{store_id}\n\n"
+                    "この内容で間違いないですか？（はい／いいえ）")
                 return
 
+            # ② 店舗名確認
             if step == "confirm_store":
                 if "はい" in text:
-                    st["step"] = "ask_seats"
-                    _line_reply(token, "次に座席数を教えてください。\n例：「1人席:3、2人席:2、4人席:1」")
+                    state["step"] = "ask_seats"
+                    _line_reply(token, "座席数を入力してください (例: 1人席:3 2人席:2 4人席:1)")
                 elif "いいえ" in text:
-                    st.clear(); st["step"] = "start"
-                    _line_reply(token, "もう一度店舗名を送ってください。")
+                    state.clear(); state["step"] = "start"
+                    _line_reply(token, "もう一度、店舗名を送ってください。")
                 else:
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
+            # ③ 座席数入力
             if step == "ask_seats":
-                prev = st.get("seats", "")
+                prev   = state.get("seat_info", "")
                 prompt = (
-                    "以下の文と前回の座席数を踏まえ、1人席・2人席・4人席の数を抽出し\n"
-                    "1人席：◯席\n2人席：◯席\n4人席：◯席\nの形式で返してください。\n\n"
-                    f"文：{text}\n前回：{prev}"
-                )
-                seats = model_chat.generate_content(prompt).text.strip()
-                st.update({"seats": seats, "step": "confirm_seats"})
+                    "以下の文と、前に把握している座席数『{prev}』をもとに、\n"
+                    "1人席、2人席、4人席の数を抽出して次の形式で答えてください：\n"
+                    "1人席：◯席\n2人席：◯席\n4人席：◯席\n\n文：{text}"
+                ).format(prev=prev, text=text)
+                seat_info = genai.GenerativeModel("gemini-pro").generate_content(prompt).text.strip()
+                state.update({"seat_info": seat_info, "step": "confirm_seats"})
                 _line_reply(token,
-                    f"以下の座席数で登録してよいですか？\n\n{seats}\n\n「はい」「いいえ」でお答えください。")
+                    "✅ 登録情報の確認です：\n\n"
+                    f"店舗名：{state['store_name']}\n店舗ID：{state['store_id']}\n\n"
+                    f"{seat_info}\n\nこの内容でよろしいですか？（はい／いいえ）")
                 return
 
+            # ④ 座席数確認
             if step == "confirm_seats":
                 if "はい" in text:
-                    st["step"] = "wait_template"
+                    state["step"] = "wait_template_img"
                     _line_reply(token,
                         "ありがとうございます！店舗登録が完了しました🎉\n\n"
-                        "空欄の予約表（テンプレート）写真を送ってください。AIが時間枠を学習します。")
+                        "まず “空欄” の予約表画像を送ってください。時間枠を解析します。")
                 elif "いいえ" in text:
-                    st["step"] = "ask_seats"
-                    _line_reply(token, "もう一度座席数を入力してください。")
+                    state["step"] = "ask_seats"
+                    _line_reply(token, "もう一度、座席数を入力してください。")
                 else:
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
+            # ⑤ 時間枠確認
             if step == "confirm_times":
                 if "はい" in text:
-                    url = create_store_sheet(st["store"], st["sid"], st["seats"], st["times"])
-                    st.update({"sheet_url": url, "step": "wait_filled"})
+                    sheet_url = create_store_sheet(
+                        state["store_name"], state["store_id"], state["seat_info"], state["times"]
+                    )
+                    state.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
                     _line_reply(token,
-                        f"スプレッドシートを作成しました！\n{url}\n\n"
-                        "当日の予約を書き込んだ紙の写真を送っていただくと、自動で追記します。")
+                        f"スプレッドシートを作成しました！\n📄 {sheet_url}\n\n"
+                        "当日の予約を書き込んだ紙の写真を送ってください。自動で記録します。")
                 elif "いいえ" in text:
-                    st["step"] = "wait_template"
-                    _line_reply(token, "わかりました。もう一度テンプレ画像を送ってください。")
+                    state["step"] = "wait_template_img"
+                    _line_reply(token, "わかりました。もう一度、空欄の予約表画像を送ってください。")
                 else:
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
-        # ---------- IMAGE ----------
-        if mtype == "image":
-            if st["step"] == "wait_template":
-                threading.Thread(target=_process_template, args=(uid, mid)).start()
-                _line_reply(token, "画像を受信しました。AIが解析中です。少々お待ちください…")
+        # ---------------- IMAGE ----------------
+        if msg_type == "image":
+            if step == "wait_template_img":
+                threading.Thread(target=_process_template_image, args=(uid, mid)).start()
+                _line_reply(token, "画像を受信しました。AI がフォーマットを解析中です…")
                 return
-            if st["step"] == "wait_filled":
-                threading.Thread(target=_process_filled, args=(uid, mid)).start()
-                _line_reply(token, "画像を受信しました。AIが予約内容を読み取っています。少々お待ちください…")
+            if step == "wait_filled_img":
+                threading.Thread(target=_process_filled_image, args=(uid, mid)).start()
+                _line_reply(token, "画像を受信しました。AI が予約情報を読み取り中です…")
                 return
             _line_reply(token, "画像を受信しましたが、現在は画像解析の準備ができていません。")
             return
 
-    except Exception as e:
-        print("[handle_event] error:", e)
+    except Exception:
+        traceback.print_exc()
         try:
-            _line_reply(ev.get("replyToken", ""), "サーバーでエラーが発生しました。再度お試しください。")
+            _line_reply(event.get("replyToken", ""), "サーバーでエラーが発生しました。しばらくしてから再試行してください。")
         except Exception:
             pass
 
-# ---------- アプリ起動 ----------
+# -------------------------------------------------------------
+#   アプリ起動
+# -------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)), debug=False)

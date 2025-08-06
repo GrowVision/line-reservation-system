@@ -44,9 +44,7 @@ SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    json.loads(GOOGLE_JSON), SCOPES
-)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(GOOGLE_JSON), SCOPES)
 gs = gspread.authorize(creds)
 
 def _get_master_ws():
@@ -68,10 +66,7 @@ def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str
     ws = sh.sheet1
     ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
-        ws.append_rows(
-            [["", "", t, "", "", ""] for t in times],
-            value_input_option="USER_ENTERED"
-        )
+        ws.append_rows([["", "", t, "", "", ""] for t in times], value_input_option="USER_ENTERED")
     _get_master_ws().append_row([
         name,
         store_id,
@@ -116,31 +111,36 @@ def _line_push(uid: str, text: str):
     )
 
 # -------------------------------------------------------------
-# Gemini 呼び出しヘルパ (1.5 Vision 向け)
+# デバッグヘルパ
+# -------------------------------------------------------------
+def _log_image_info(img: bytes, label: str):
+    print(f"[{label}] img bytes length = {len(img)}")
+
+# -------------------------------------------------------------
+# Gemini 呼び出しヘルパ (1.5 Vision 向け修正版)
 # -------------------------------------------------------------
 def _gemini_text(prompt: str, max_t: int = 256) -> str:
     res = genai.GenerativeModel(MODEL_TEXT).generate_content(
-        prompt,
-        generation_config={"max_output_tokens": max_t}
+        prompt, generation_config={"max_output_tokens": max_t}
     )
-    print(f"[Gemini Text] prompt={prompt} -> {res.text}")
+    print(f"[Gemini Text] prompt={prompt}\n-> {res.text}")
     return res.text.strip()
 
 def _gemini_vision(img: bytes, prompt: str, max_t: int = 1024) -> str:
     img_b64 = base64.b64encode(img).decode()
+    print(f"[_gemini_vision] Base64 length = {len(img_b64)}")
     contents = [
         {"type": "image", "data": img_b64, "mime_type": "image/jpeg"},
         {"type": "text",  "text": prompt}
     ]
     try:
         res = genai.GenerativeModel(MODEL_VISION).generate_content(
-            contents,
-            generation_config={"max_output_tokens": max_t}
+            contents, generation_config={"max_output_tokens": max_t}
         )
-        print(f"[Gemini Vision] success: {res}")
+        print(f"[Gemini Vision] full response = {res}")
         return res.text.strip()
     except Exception as e:
-        print(f"[Gemini Vision] error: {e}")
+        print(f"[Gemini Vision] error = {e}")
         raise
 
 # -------------------------------------------------------------
@@ -156,36 +156,47 @@ def _vision_describe_sheet(img: bytes) -> str:
         "- テーブル番号の使い分け"
     )
     try:
-        return _gemini_vision(img, prompt, 1024)
-    except Exception:
+        print(f"[_vision_describe_sheet] prompt = {prompt}")
+        result = _gemini_vision(img, prompt, 1024)
+        print(f"[_vision_describe_sheet] result = {result}")
+        return result
+    except Exception as e:
+        print(f"[_vision_describe_sheet] exception = {e}")
         return "画像解析に失敗しました。もう一度鮮明な画像をお送りください。"
 
 # -------------------------------------------------------------
 # 時間帯抽出
 # -------------------------------------------------------------
 def _vision_extract_times(img: bytes) -> List[str]:
+    _log_image_info(img, "_vision_extract_times img")
     prompt = (
         "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
         "左上→右下の順に重複なく昇順で JSON 配列として返してください。"
     )
     try:
         data = json.loads(_gemini_vision(img, prompt, 256))
+        print(f"[_vision_extract_times] data = {data}")
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        print(f"[_vision_extract_times] exception = {e}")
         return []
 
 # -------------------------------------------------------------
 # 予約行抽出
 # -------------------------------------------------------------
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
+    _log_image_info(img, "_vision_extract_rows img")
     prompt = (
         "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
-        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
+        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str," +
+        "\"size\":int,\"note\":str}]"
     )
     try:
         data = json.loads(_gemini_vision(img, prompt, 2048))
+        print(f"[_vision_extract_rows] data = {data}")
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        print(f"[_vision_extract_rows] exception = {e}")
         return []
 
 # -------------------------------------------------------------
@@ -197,16 +208,18 @@ def _download_line_img(msg_id: str) -> bytes:
         headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}, timeout=15
     )
     r.raise_for_status()
-    return r.content
+    data = r.content
+    print(f"[_download_line_img] downloaded bytes = {len(data)}")
+    return data
 
 # -------------------------------------------------------------
 # 背景スレッド処理
 # -------------------------------------------------------------
 def _process_template(uid: str, msg_id: str):
     st = user_state.get(uid)
-    if not st or st.get("step") != "wait_template_img":
-        return
+    if not st or st.get("step") != "wait_template_img": return
     img = _download_line_img(msg_id)
+    _log_image_info(img, "_process_template img")
     desc = _vision_describe_sheet(img)
     if "失敗しました" in desc:
         _line_push(uid, desc)
@@ -219,10 +232,11 @@ def _process_template(uid: str, msg_id: str):
 # -------------------------------------------------------------
 def _process_filled(uid: str, msg_id: str):
     st = user_state.get(uid)
-    if not st or st.get("step") != "wait_filled_img":
-        return
+    if not st or st.get("step") != "wait_filled_img": return
     img = _download_line_img(msg_id)
+    _log_image_info(img, "_process_filled img")
     rows = _vision_extract_rows(img)
+    print(f"[_process_filled] rows = {rows}")
     if not rows:
         _line_push(uid, "予約情報が検出できませんでした。鮮明な画像をもう一度お送りください。")
         return

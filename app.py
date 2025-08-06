@@ -14,9 +14,7 @@ GOOGLE_SERVICE_ACCOUNT    : サービスアカウント JSON 全文（1 行で�
 MASTER_SHEET_NAME         : 契約店舗一覧シート名（省略時 "契約店舗一覧"）
 """
 # --- 追加 ---
-import google.generativeai as genai          # ← 追加
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
+import google.generativeai as genai        # ★ 追加（最上部の import 群に）
 from __future__ import annotations
 
 import base64
@@ -33,6 +31,7 @@ from dotenv import load_dotenv
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
 from openai import OpenAI
+
 
 # -------------------------------------------------------------
 # 初期設定

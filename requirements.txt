@@ -1,9 +1,8 @@
 flask
 requests
-openai
 python-dotenv
 gspread==5.12.0
 oauth2client==4.1.3
-google-generativeai==0.3.2      # Gemini SDK 本体
-google-auth==2.29.0             # 認証トークンを作る
-google-api-python-client==2.131.0  # Sheets API 用
+google-generativeai==0.3.2
+google-auth==2.29.0
+google-api-python-client==2.131.0

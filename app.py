@@ -13,6 +13,9 @@ LINE_CHANNEL_ACCESS_TOKEN : LINE Messaging API のアクセストークン
 GOOGLE_SERVICE_ACCOUNT    : サービスアカウント JSON 全文（1 行で）
 MASTER_SHEET_NAME         : 契約店舗一覧シート名（省略時 "契約店舗一覧"）
 """
+# --- 追加 ---
+import google.generativeai as genai          # ← 追加
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 from __future__ import annotations
 
@@ -38,7 +41,8 @@ from openai import OpenAI
 app = Flask(__name__)
 load_dotenv()
 
-OPENAI_API_KEY            = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GEMINI_API_KEY)       # ★ 追加
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 MASTER_SHEET_NAME         = os.getenv("MASTER_SHEET_NAME", "契約店舗一覧")
 
@@ -273,20 +277,7 @@ def _handle_event(event: Dict[str, Any]):
         if msg_type == "text":
             step = st["step"]
 
-            if step == "start":
-                # 店舗名抽出
-                res = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": f"以下の文から店舗名だけを抽出してください：\n{text}"}],
-                    max_tokens=50,
-                )
-                store_name = res.choices[0].message.content.strip()
-                store_id = random.randint(100000, 999999)
-                st.update({"step": "confirm_store", "store_name": store_name, "store_id": store_id})
-                _line_reply(token,
-                    f"店舗名: {store_name} です。これで登録します。\n店舗ID: {store_id}\nこの内容でよろしいですか？（はい／いいえ）")
-                return
-
+           
             if step == "confirm_store":
                 if "はい" in text:
                     st["step"] = "ask_seats"
@@ -299,16 +290,29 @@ def _handle_event(event: Dict[str, Any]):
                     _line_reply(token, "「はい」または「いいえ」でお答えください。")
                 return
 
-            if step == "ask_seats":
-                prev = st.get("seat_info", "")
-                res = client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": f"以下の文と、前の座席数『{prev}』をもとに、1人席、2人席、4人席の数を抽出して次の形式で答えてください：\n1人席：◯\n2人席：◯\n4人席：◯\n\n{text}"}],
+            if step == "start":
+                # ── 店舗名を Gemini で抽出 ──
+                prompt = f"以下の文から店舗名だけを抽出してください：\n{text}"
+
+                model_chat = genai.GenerativeModel("gemini-pro")
+                response   = model_chat.generate_content(prompt)
+                store_name = response.text.strip()
+
+                store_id = random.randint(100000, 999999)
+                st.update({
+                    "step":       "confirm_store",
+                    "store_name": store_name,
+                    "store_id":   store_id
+                })
+
+                _line_reply(
+                    token,
+                    f"店舗名: {store_name} です。これで登録します。\n"
+                    f"店舗ID: {store_id}\n"
+                    f"この内容でよろしいですか？（はい／いいえ）"
                 )
-                seat_info = res.choices[0].message.content.strip()
-                st.update({"seat_info": seat_info, "step": "confirm_seats"})
-                _line_reply(token, f"確認です。\n\n{seat_info}\n\nこの内容で間違いないですか？（はい／いいえ）")
                 return
+
 
             if step == "confirm_seats":
                 if "はい" in text:

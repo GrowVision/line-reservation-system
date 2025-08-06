@@ -32,7 +32,6 @@ import requests
 from dotenv import load_dotenv
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
-from openai import OpenAI
 
 # ---------------------------------------------------------------------
 # 初期設定
@@ -43,11 +42,10 @@ load_dotenv()
 
 # ▶ Gemini テキスト用
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # ▶ GPT-4o 画像用
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ▶ LINE
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
@@ -55,7 +53,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 # ▶ Google Sheets
 MASTER_SHEET_NAME = os.getenv("MASTER_SHEET_NAME", "契約店舗一覧")
 
-if not (OPENAI_API_KEY and LINE_CHANNEL_ACCESS_TOKEN and GEMINI_API_KEY):
+if not (LINE_CHANNEL_ACCESS_TOKEN and GEMINI_API_KEY):
     raise RuntimeError("API キーが不足しています。環境変数を確認してください。")
 
 # ユーザー状態
@@ -161,24 +159,32 @@ def _make_image_prompt(img_b64: str, task: str):
         ],
     }]
 
-def _vision_request(messages: List[Dict[str, Any]], max_tokens: int = 512):
-    return openai_client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=0.0,
+# --- 画像用 Gemini Vision に変更 -----------------------------
+def _vision_request(img_b64: str, task: str, max_tokens: int = 1024):
+    """
+    Gemini-pro-vision に画像 + テキスト指示を渡し、
+    レスポンス文字列を返すシンプルラッパー
+    """
+    model = genai.GenerativeModel("gemini-pro-vision")
+    resp  = model.generate_content(
+        [
+            {"text": task},
+            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
+        ],
+        generation_config={"max_output_tokens": max_tokens}
     )
+    return resp.text.strip()
+
 
 def _vision_extract_times(img: bytes) -> List[str]:
     b64 = base64.b64encode(img).decode()
     task = (
         "画像は空欄の飲食店予約表です。"
-        "予約可能な時間帯 (HH:MM) を、左上→右下の順にすべて抽出し、"
-        "重複なく昇順で JSON 配列として返してください。"
+        "予約可能な時間帯 (HH:MM) を左上→右下の順にすべて抽出し、"
+        "重複なく昇順で **JSON 配列** だけを返してください。"
     )
-    res = _vision_request(_make_image_prompt(b64, task), 256)
     try:
-        data = json.loads(res.choices[0].message.content)
+        data = json.loads(_vision_request(b64, task, 256))
         return [str(t) for t in data] if isinstance(data, list) else []
     except Exception:
         return []
@@ -187,11 +193,11 @@ def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
     b64 = base64.b64encode(img).decode()
     task = (
         "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
-        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
+        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,"
+        "\"size\":int,\"note\":str}]"
     )
-    res = _vision_request(_make_image_prompt(b64, task), 1024)
     try:
-        data = json.loads(res.choices[0].message.content)
+        data = json.loads(_vision_request(b64, task, 1024))
         return data if isinstance(data, list) else []
     except Exception:
         return []

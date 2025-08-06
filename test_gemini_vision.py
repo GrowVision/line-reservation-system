@@ -3,7 +3,7 @@ import os
 from google import genai
 from google.genai import types
 
-# 1) クライアント初期化
+# 1) 新SDK クライアント初期化
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 # 2) 画像読み込み
@@ -21,7 +21,7 @@ prompt = (
     "- テーブル番号の使い分け"
 )
 
-# 4) SDK 呼び出し
+# 4) SDK 呼び出し（types.Part を利用）
 try:
     response = client.models.generate_content(
         model="models/gemini-1.5-pro-latest",

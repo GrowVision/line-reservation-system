@@ -134,7 +134,9 @@ def _download_line_image(message_id: str) -> bytes:
 #   Gemini Vision ラッパ
 # -------------------------------------------------------------
 def _vision_request(img_b64: str, prompt: str, max_tokens: int = 2048):
-    model = genai.GenerativeModel("gemini-pro-vision")
+    # ▼ ここを “gemini-1.0-pro-vision” に変更
+    model = genai.GenerativeModel("gemini-1.0-pro-vision")
+
     res = model.generate_content(
         [
             {"type": "image", "data": img_b64, "mime_type": "image/jpeg"},
@@ -142,7 +144,7 @@ def _vision_request(img_b64: str, prompt: str, max_tokens: int = 2048):
         ],
         generation_config={"max_output_tokens": max_tokens}
     )
-    return res.text           # → str
+    return res.text
 
 def _vision_extract_times(img: bytes) -> List[str]:
     task = (
@@ -233,15 +235,30 @@ def _handle_event(event: Dict[str, Any]):
         # ---------------- TEXT ----------------
         if msg_type == "text":
             # ① 店舗名登録
-            if step == "start":
-                prompt   = f"以下の文から店舗名だけを抽出してください：\n{text}"
-                store_name = genai.GenerativeModel("gemini-pro").generate_content(prompt).text.strip()
-                store_id   = random.randint(100000, 999999)
-                state.update({"step": "confirm_store", "store_name": store_name, "store_id": store_id})
-                _line_reply(token,
-                    f"登録完了：店舗名：{store_name}\n店舗ID：{store_id}\n\n"
-                    "この内容で間違いないですか？（はい／いいえ）")
-                return
+            # ① 店舗名登録
+# ① 店舗名登録
+if step == "start":
+    prompt = f"以下の文から店舗名だけを抽出してください：\n{text}"
+
+    # ▼ 修正ポイントはここの 1 行だけ
+    store_name = genai.GenerativeModel("gemini-1.0-pro") \
+                       .generate_content(prompt) \
+                       .text.strip()
+
+    store_id = random.randint(100000, 999999)
+    state.update({
+        "step":       "confirm_store",
+        "store_name": store_name,
+        "store_id":   store_id
+    })
+    _line_reply(
+        token,
+        f"登録完了：店舗名：{store_name}\n"
+        f"店舗ID：{store_id}\n\n"
+        "この内容で間違いないですか？（はい／いいえ）"
+    )
+    return
+
 
             # ② 店舗名確認
             if step == "confirm_store":

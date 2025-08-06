@@ -162,12 +162,20 @@ def _vision_describe_sheet(img: bytes) -> str:
     )
     try:
         print(f"[_vision_describe_sheet] prompt = {prompt}")
-        result = _gemini_vision(img, prompt, 1024)
-        print(f"[_vision_describe_sheet] result = {result}")
-        return result
+        response = client.models.generate_content(
+            model=MODEL_VISION,
+            contents=[
+                types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                types.Part.from_text(text=prompt)
+            ],
+            generation_config={"max_output_tokens": 1024}
+        )
+        print(f"[_vision_describe_sheet] result = {response.text}")
+        return response.text.strip()
     except Exception as e:
         print(f"[_vision_describe_sheet] exception = {e}")
         return "画像解析に失敗しました。もう一度鮮明な画像をお送りください。"
+
 
 # -------------------------------------------------------------
 # 時間帯抽出

@@ -71,9 +71,7 @@ def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str
     sh = gs.create(f"予約表 - {name} ({store_id})")
     sh.share(None, perm_type="anyone", role="writer")
     ws = sh.sheet1
-    ws.update([[
-        "月", "日", "時間帯", "名前", "人数", "備考"
-    ]])
+    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
         ws.append_rows(
             [["", "", t, "", "", ""] for t in times],
@@ -97,7 +95,7 @@ def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]) -> None:
         ws.append_rows(values, value_input_option="USER_ENTERED")
 
 # -------------------------------------------------------------
-# LINE メッセージ送信
+# LINE メッセージ送受信
 # -------------------------------------------------------------
 def _line_reply(token: str, text: str):
     requests.post(
@@ -122,7 +120,7 @@ def _line_push(uid: str, text: str):
     )
 
 # -------------------------------------------------------------
-# LINE 画像ダウンロード
+# 画像ダウンロード
 # -------------------------------------------------------------
 def _download_line_img(msg_id: str) -> bytes:
     r = requests.get(
@@ -133,7 +131,7 @@ def _download_line_img(msg_id: str) -> bytes:
     return r.content
 
 # -------------------------------------------------------------
-# 画像解析ロジック
+# 画像解析・要約
 # -------------------------------------------------------------
 def _vision_describe_sheet(img: bytes) -> str:
     prompt = (
@@ -145,7 +143,6 @@ def _vision_describe_sheet(img: bytes) -> str:
         "- テーブル番号の使い分け"
     )
     try:
-        print(f"[_vision_describe_sheet] prompt = {prompt}")
         response = client.models.generate_content(
             model=MODEL_VISION,
             contents=types.Content(
@@ -156,7 +153,6 @@ def _vision_describe_sheet(img: bytes) -> str:
             ),
             config=types.GenerateContentConfig(max_output_tokens=1024)
         )
-        print(f"[_vision_describe_sheet] result = {response.text}")
         return response.text.strip()
     except Exception as e:
         print(f"[_vision_describe_sheet] exception = {e}")
@@ -270,30 +266,39 @@ def _handle_event(event: Dict[str, Any]):
         st     = user_state.setdefault(uid, {"step": "start"})
         step   = st.get("step")
 
+        # 解析状況問い合わせ
         if mtype == "text" and "まだ分析" in text:
             _line_reply(token, "まだ解析中です。しばらくお待ちください。解析できない場合は再度画像を送ってください。")
             return
 
         if mtype == "text":
-            # --- 店舗登録から座席数、テンプレ受信までのフロー ---
+            # --- 店舗名受け取り ---
             if step == "start":
                 name = client.models.generate_content(
                     model=MODEL_TEXT,
                     contents=types.Content(parts=[types.Part.from_text(text=f"以下の文から店舗名だけを抽出してください：\n{text}")]),
-                    config=types.GenerateContentConfig(max_output_tokens=64)
-                ).text.strip()
+                    config=types.GenerateContentConfig(max_output_tokens=64
+                )).text.strip()
                 sid = random.randint(100000, 999999)
                 st.update({"step": "confirm_store", "store_name": name, "store_id": sid})
-                _line_reply(token, f"登録完了：店舗名：{name}\n店舗ID：{sid}\nこの内容で間違いないですか？（はい／いいえ）")
+                _line_reply(
+                    token,
+                    f"登録完了：店舗名：{name}\n店舗ID：{sid}\nこの内容で間違いないですか？（はい／いいえ）"
+                )
                 return
+
+            # --- 店舗名確認 ---
             if step == "confirm_store":
                 if "はい" in text:
                     st["step"] = "ask_seats"
                     _line_reply(token, "座席数を入力してください (例: 1人席:3 2人席:2 4人席:1)")
                 else:
-                    st.clear(); st["step"] = "start"
+                    st.clear()
+                    st["step"] = "start"
                     _line_reply(token, "店舗名をもう一度送ってください。")
                 return
+
+            # --- 座席数入力 ---
             if step == "ask_seats":
                 info = client.models.generate_content(
                     model=MODEL_TEXT,
@@ -301,9 +306,33 @@ def _handle_event(event: Dict[str, Any]):
                     config=types.GenerateContentConfig(max_output_tokens=128)
                 ).text.strip()
                 st.update({"seat_info": info, "step": "confirm_seats"})
-                _line_reply(token, f"座席数確認：\n{info}\nこの内容で登録しますか？（はい／いいえ）")
+                _line_reply(
+                    token,
+                    f"座席数確認：\n{info}\nこの内容で登録しますか？（はい／いいえ）"
+                )
                 return
+
+            # --- 座席数確認 & 登録情報確認 ---
             if step == "confirm_seats":
+                if "はい" in text:
+                    st["step"] = "confirm_registration"
+                    seat_info = st["seat_info"]
+                    _line_reply(
+                        token,
+                        "✅ 登録情報の確認です：\n\n"
+                        f"・店舗名：{st['store_name']}\n"
+                        f"・店舗ID：{st['store_id']}\n"
+                        "・座席数：\n"
+                        f"{seat_info}\n\n"
+                        "この内容で登録してもよろしいですか？（はい／いいえ）"
+                    )
+                else:
+                    st["step"] = "ask_seats"
+                    _line_reply(token, "座席数を再度入力してください。")
+                return
+
+            # --- 登録情報最終確認 ---
+            if step == "confirm_registration":
                 if "はい" in text:
                     st["step"] = "wait_template_img"
                     _line_reply(token, "空欄の予約表の画像を送ってください。解析します…")
@@ -312,16 +341,17 @@ def _handle_event(event: Dict[str, Any]):
                     _line_reply(token, "座席数を再度入力してください。")
                 return
 
+        # --- 画像受信 ---
         if mtype == "image":
             if step == "wait_template_img":
                 threading.Thread(target=_process_template, args=(uid, msg_id)).start()
-                _line_reply(token, "画像受信。解析中です…")
+                _line_reply(token, "画像を受信しました。解析中です…")
                 return
             if step == "wait_filled_img":
                 threading.Thread(target=_process_filled, args=(uid, msg_id)).start()
-                _line_reply(token, "画像受信。予約情報抽出中…")
+                _line_reply(token, "画像を受信しました。予約情報を抽出中…")
                 return
-            _line_reply(token, "画像受信しましたが、現在解析できる状態ではありません。")
+            _line_reply(token, "画像は受信しましたが、現在解析できる状態ではありません。")
     except Exception as e:
         print(f"[handle_event error] {e}")
         _line_reply(event.get("replyToken", ""), "エラーが発生しました。もう一度お試しください。")

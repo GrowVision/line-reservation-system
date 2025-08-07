@@ -346,4 +346,15 @@ def webhook() -> tuple[str, int]:
     return 'OK', 200
 
 if __name__ == '__main__':
+    # ===== 以下はスプレッドシート自動作成テスト用コード =====
+    # テスト用の店舗情報でシートを自動生成します。不要なら削除してください。
+    test_url = create_store_sheet(
+        name='自動テスト店',
+        store_id=111111,
+        seat_info='1人席:3 2人席:2 4人席:1',
+        times=['18:00', '19:00']
+    )
+    print(f'自動作成されたシートURL: {test_url}')
+    # ===========================================
+
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)

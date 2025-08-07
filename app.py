@@ -130,7 +130,6 @@ def _line_reply(token: str, text: str) -> None:
         timeout=10
     )
 
-
 def _line_push(uid: str, text: str) -> None:
     requests.post(
         "https://api.line.me/v2/bot/message/push",
@@ -181,7 +180,6 @@ def _vision_describe_sheet(img: bytes) -> str:
         print(f"[_vision_describe_sheet] exception={e}")
         return "画像解析に失敗しました。もう一度鮮明な画像をお送りください。"
 
-
 def _vision_extract_times(img: bytes) -> List[str]:
     prompt = (
         "画像は空欄の飲食店予約表です。\n"
@@ -201,7 +199,6 @@ def _vision_extract_times(img: bytes) -> List[str]:
     except Exception as e:
         print(f"[_vision_extract_times] exception={e}")
         return []
-
 
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
     prompt = (
@@ -223,7 +220,6 @@ def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
         print(f"[_vision_extract_rows] exception={e}")
         return []
 
-
 def _process_template(uid: str, msg_id: str) -> None:
     st = user_state.get(uid)
     if not st or st.get("step") != "wait_template_img":
@@ -235,7 +231,6 @@ def _process_template(uid: str, msg_id: str) -> None:
         return
     st.update({"template_img": img, "step": "confirm_template"})
     _line_push(uid, f"{desc}\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
-
 
 def _process_filled(uid: str, msg_id: str) -> None:
     st = user_state.get(uid)
@@ -255,8 +250,7 @@ def _process_filled(uid: str, msg_id: str) -> None:
     _line_push(uid, f"✅ 予約情報を追記しました！ 最新シート: {st['sheet_url']}")
     st['step'] = 'done'
 
-
-def _handle_event(event: Dict[str, Any]]) -> None:
+def _handle_event(event: Dict[str, Any]) -> None:
     try:
         if event.get("type") != "message":
             return
@@ -294,11 +288,11 @@ def _handle_event(event: Dict[str, Any]]) -> None:
             if step == 'ask_seats':
                 resp = client.models.generate_content(
                     model=MODEL_TEXT,
-                    contents=types.Content(parts=[
+                   (contents=types.Content(parts=[
                         types.Part.from_text(text=(
                             f"以下の文から座席数を抽出し、形式「1人席:◯ 2人席:◯ 4人席:◯」で出力してください：\n{text}"
                         ))
-                    ]),
+                    ])),
                     config=types.GenerateContentConfig(max_output_tokens=128)
                 )
                 seat_info = resp.text.strip()
@@ -351,5 +345,5 @@ def webhook() -> tuple[str, int]:
     threading.Thread(target=_handle_event, args=(events[0],)).start()
     return 'OK', 200
 
-if __name__ == '__main__':
+if __name__ =="__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)

@@ -76,7 +76,7 @@ def create_store_sheet(
     sh = gs.create(f"予約表 - {name} ({store_id})")
     sh.share(None, perm_type="anyone", role="writer")
     ws = sh.sheet1
-    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
+    ws.update(["月", "日", "時間帯", "名前", "人数", "備考"])
 
     if times:
         rows = [["", "", t, "", "", ""] for t in times]
@@ -288,11 +288,11 @@ def _handle_event(event: Dict[str, Any]) -> None:
             if step == 'ask_seats':
                 resp = client.models.generate_content(
                     model=MODEL_TEXT,
-                   (contents=types.Content(parts=[
+                    contents=types.Content(parts=[
                         types.Part.from_text(text=(
                             f"以下の文から座席数を抽出し、形式「1人席:◯ 2人席:◯ 4人席:◯」で出力してください：\n{text}"
                         ))
-                    ])),
+                    ]),
                     config=types.GenerateContentConfig(max_output_tokens=128)
                 )
                 seat_info = resp.text.strip()
@@ -317,7 +317,7 @@ def _handle_event(event: Dict[str, Any]) -> None:
                     st.update({'step': 'wait_filled_img', 'sheet_url': url})
                     _line_push(uid, f"✅ シート作成完了！ {url}\n記入済みの画像を送ってください。")
                 else:
-                    st.update({'step': 'wait_template_img'})
+                    st.update({'step": 'wait_template_img'})
                     _line_reply(token, 'テンプレート画像を再度お送りください。')
                 return
         if mtype == 'image':
@@ -345,5 +345,5 @@ def webhook() -> tuple[str, int]:
     threading.Thread(target=_handle_event, args=(events[0],)).start()
     return 'OK', 200
 
-if __name__ =="__main__":
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)

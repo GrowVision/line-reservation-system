@@ -53,6 +53,16 @@ user_state: Dict[str, Dict[str, Any]] = {}
 # -------------------------------------------------------------
 # Google Sheets 認証
 # -------------------------------------------------------------
+# token.json が書き出された直後に、その中身をログ出力する
+token_path = "/opt/render/project/src/token.json"
+if os.path.exists(token_path):
+    print("===== token.json の中身 =====")
+    with open(token_path, "r", encoding="utf-8") as f:
+        print(f.read())
+    print("===== 以上 token.json の中身 =====")
+else:
+    print("token.json が見つかりませんでした。")
+
 gc = gspread.oauth(
     credentials_filename="/opt/render/project/src/credentials.json",
     authorized_user_filename="/opt/render/project/src/token.json"

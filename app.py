@@ -10,12 +10,15 @@ from typing import Any, Dict, List
 # 新SDK のインポート
 from google import genai
 from google.genai import types
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
 
 import gspread
 import requests
 from dotenv import load_dotenv
 from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
+
 
 # -------------------------------------------------------------
 # 環境変数 & モデル設定
@@ -56,9 +59,17 @@ user_state: Dict[str, Dict[str, Any]] = {}
 # Google Sheets 認証
 # -------------------------------------------------------------
 SCOPES = [
-    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
+flow = InstalledAppFlow.from_client_secrets_file(
+    "credentials.json",
+    SCOPES
+)
+creds = flow.run_local_server()  # ブラウザが開くので許可を出す
+with open("token.json", "w", encoding="utf-8") as f:
+    f.write(creds.to_json())
+
 # -------------------------------------------------------------
 # Google Sheets 認証
 # -------------------------------------------------------------

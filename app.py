@@ -4,7 +4,6 @@ import datetime as dt
 import os
 import random
 import threading
-import json
 from typing import Any, Dict, List
 
 # 新SDK のインポート
@@ -12,6 +11,27 @@ from google import genai
 from google.genai import types
 
 import gspread
+from googleapiclient.discovery import build
+
+def purge_service_account_sheets(sa_info: dict):
+    """
+    サービスアカウントのドライブ内にある
+    すべてのスプレッドシートを削除します。
+    """
+    creds = gspread.service_account_from_dict(sa_info)._credentials
+    drive = build("drive", "v3", credentials=creds)
+
+    resp = drive.files().list(
+        q="mimeType='application/vnd.google-apps.spreadsheet'",
+        fields="files(id, name)",
+        pageSize=1000
+    ).execute()
+    for f in resp.get("files", []):
+        print(f"Deleting: {f['name']} ({f['id']})")
+        drive.files().delete(fileId=f["id"]).execute()
+    print("❌ All service-account sheets purged.")
+
+
 import requests
 from dotenv import load_dotenv
 from flask import Flask, request
@@ -64,37 +84,13 @@ if os.path.exists(token_path):
 else:
     print("token.json が見つかりませんでした。")
 
+import json
 # 環境変数からサービスアカウントキーJSONを読み込んで認証
 sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
-
 # サービスアカウント認証で gspread クライアントを生成
 gc = gspread.service_account_from_dict(sa_info)
+# ← ここに一時的に purge_service_account_sheets を呼び出します
 purge_service_account_sheets(sa_info)
-
-
-from googleapiclient.discovery import build
-
-def purge_service_account_sheets(sa_info: dict):
-    """
-    サービスアカウントのドライブ内にある
-    すべてのスプレッドシートを削除します。
-    """
-    # gspread の内部 creds を取り出して Drive API クライアントを作成
-    creds = gspread.service_account_from_dict(sa_info)._credentials
-    drive = build("drive", "v3", credentials=creds)
-
-    # Spreadsheet MIME type のみを取得
-    resp = drive.files().list(
-        q="mimeType='application/vnd.google-apps.spreadsheet'",
-        fields="files(id, name)",
-        pageSize=1000
-    ).execute()
-    files = resp.get("files", [])
-    for f in files:
-        print(f"Deleting: {f['name']} ({f['id']})")
-        drive.files().delete(fileId=f["id"]).execute()
-    print("❌ All service-account sheets purged.")
-
 
 def _get_master_ws() -> gspread.Worksheet:
     try:

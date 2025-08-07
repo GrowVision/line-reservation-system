@@ -164,11 +164,13 @@ def _vision_describe_sheet(img: bytes) -> str:
         print(f"[_vision_describe_sheet] prompt = {prompt}")
         response = client.models.generate_content(
             model=MODEL_VISION,
-            contents=[
-                types.Part.from_bytes(data=img, mime_type="image/jpeg"),
-                types.Part.from_text(text=prompt)
-            ],
-            max_output_tokens=1024
+            contents=types.Content(
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt),
+                ]
+            ),
+            config=types.GenerateContentConfig(max_output_tokens=1024)
         )
         print(f"[_vision_describe_sheet] result = {response.text}")
         return response.text.strip()
@@ -181,14 +183,22 @@ def _vision_describe_sheet(img: bytes) -> str:
 # 時間帯抽出
 # -------------------------------------------------------------
 def _vision_extract_times(img: bytes) -> List[str]:
-    _log_image_info(img, "_vision_extract_times img")
     prompt = (
         "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
         "左上→右下の順に重複なく昇順で JSON 配列として返してください。"
     )
     try:
-        data = json.loads(_gemini_vision(img, prompt, 256))
-        print(f"[_vision_extract_times] data = {data}")
+        response = client.models.generate_content(
+            model=MODEL_VISION,
+            contents=types.Content(
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt),
+                ]
+            ),
+            config=types.GenerateContentConfig(max_output_tokens=256)
+        )
+        data = json.loads(response.text)
         return data if isinstance(data, list) else []
     except Exception as e:
         print(f"[_vision_extract_times] exception = {e}")
@@ -198,15 +208,22 @@ def _vision_extract_times(img: bytes) -> List[str]:
 # 予約行抽出
 # -------------------------------------------------------------
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
-    _log_image_info(img, "_vision_extract_rows img")
     prompt = (
         "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
-        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str," +
-        "\"size\":int,\"note\":str}]"
+        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
     )
     try:
-        data = json.loads(_gemini_vision(img, prompt, 2048))
-        print(f"[_vision_extract_rows] data = {data}")
+        response = client.models.generate_content(
+            model=MODEL_VISION,
+            contents=types.Content(
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt),
+                ]
+            ),
+            config=types.GenerateContentConfig(max_output_tokens=2048)
+        )
+        data = json.loads(response.text)
         return data if isinstance(data, list) else []
     except Exception as e:
         print(f"[_vision_extract_rows] exception = {e}")

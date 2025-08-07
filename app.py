@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 # 新SDK のインポート
 from google import genai
 from google.genai import types
-
+import json
 import gspread
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials as SACredentials
@@ -99,7 +99,6 @@ if os.path.exists(token_path):
 else:
     print("token.json が見つかりませんでした。")
 
-import json
 # 環境変数からサービスアカウントキーJSONを読み込んで認証
 sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
 # サービスアカウント認証で gspread クライアントを生成

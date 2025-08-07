@@ -134,11 +134,11 @@ def create_store_sheet(
         "parents": [SHARED_DRIVE_ID]
     }
     file = drive.files().create(
-        body=metadata,
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-        fields="id, webViewLink"
-    ).execute()
+    body=metadata,
+    supportsAllDrives=True,
+    fields="id, webViewLink"
+).execute()
+
     sheet_url = file["webViewLink"]
 
     # 2) gspread でそのシートを開いて初期行をセット

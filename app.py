@@ -48,6 +48,9 @@ SCOPES = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
+# -------------------------------------------------------------
+# Google Sheets 認証
+# -------------------------------------------------------------
 creds = ServiceAccountCredentials.from_json_keyfile_dict(
     json.loads(GOOGLE_JSON),
     SCOPES

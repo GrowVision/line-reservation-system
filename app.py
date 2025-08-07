@@ -12,15 +12,21 @@ from google.genai import types
 
 import gspread
 from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials as SACredentials
 
 def purge_service_account_sheets(sa_info: dict):
     """
     サービスアカウントのドライブ内にある
     すべてのスプレッドシートを削除します。
     """
-    creds = gspread.service_account_from_dict(sa_info)._credentials
+    # サービスアカウント情報から直接 Credentials を作成
+    creds = SACredentials.from_service_account_info(
+        sa_info,
+        scopes=["https://www.googleapis.com/auth/drive"]
+    )
     drive = build("drive", "v3", credentials=creds)
 
+    # スプレッドシートのみをリストアップして削除
     resp = drive.files().list(
         q="mimeType='application/vnd.google-apps.spreadsheet'",
         fields="files(id, name)",
@@ -29,6 +35,7 @@ def purge_service_account_sheets(sa_info: dict):
     for f in resp.get("files", []):
         print(f"Deleting: {f['name']} ({f['id']})")
         drive.files().delete(fileId=f["id"]).execute()
+
     print("❌ All service-account sheets purged.")
 
 

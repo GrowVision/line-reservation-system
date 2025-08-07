@@ -64,12 +64,11 @@ if os.path.exists(token_path):
 else:
     print("token.json が見つかりませんでした。")
 
-gc = gspread.oauth(
-    credentials_filename="/opt/render/project/src/credentials.json",
-    authorized_user_filename="/opt/render/project/src/token.json"
-)
+# 環境変数からサービスアカウントキーJSONを読み込んで認証
+sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
 
-
+# サービスアカウント認証で gspread クライアントを生成
+gc = gspread.service_account_from_dict(sa_info)
 
 def _get_master_ws() -> gspread.Worksheet:
     try:

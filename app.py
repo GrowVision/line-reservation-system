@@ -1,162 +1,94 @@
 from __future__ import annotations
-import base64
+import json
 import datetime as dt
 import os
-import random
-import threading
 from typing import Any, Dict, List
 
-# 新SDK のインポート
-from google import genai
-from google.genai import types
-import json
 import gspread
-from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials as SACredentials
-
-sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
-creds = SACredentials.from_service_account_info(
-    sa_info,
-    scopes=["https://www.googleapis.com/auth/drive"]
-)
-drive = build("drive", "v3", credentials=creds)
-
-
-def purge_service_account_sheets(sa_info: dict):
-    """
-    サービスアカウントのドライブ内にある
-    すべてのスプレッドシートを削除します。
-    """
-    # サービスアカウント情報から直接 Credentials を作成
-    creds = SACredentials.from_service_account_info(
-        sa_info,
-        scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    drive = build("drive", "v3", credentials=creds)
-
-    # スプレッドシートのみをリストアップして削除
-    resp = drive.files().list(
-        q="mimeType='application/vnd.google-apps.spreadsheet'",
-        fields="files(id, name)",
-        pageSize=1000
-    ).execute()
-    for f in resp.get("files", []):
-        print(f"Deleting: {f['name']} ({f['id']})")
-        drive.files().delete(fileId=f["id"]).execute()
-
-    print("❌ All service-account sheets purged.")
-
-
-import requests
+from googleapiclient.discovery import build
 from dotenv import load_dotenv
 from flask import Flask, request
+import requests
+from google import genai
+from google.genai import types
 
 # -------------------------------------------------------------
-# 環境変数 & モデル設定
+# 環境変数ロード
 # -------------------------------------------------------------
 load_dotenv()
-# Environment 変数から JSON をファイルとして書き出し
-cred_json = os.environ.get("CREDENTIALS_JSON")
-if cred_json:
-    with open("/opt/render/project/src/credentials.json", "w", encoding="utf-8") as f:
-        f.write(cred_json)
-
-# （同様に TOKEN_JSON があれば書き出す）
-token_json = os.environ.get("TOKEN_JSON")
-if token_json:
-    with open("/opt/render/project/src/token.json", "w", encoding="utf-8") as f:
-        f.write(token_json)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-GOOGLE_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_SERVICE_ACCOUNT")
-MASTER_SHEET_NAME = os.getenv("MASTER_SHEET_NAME", "契約店舗一覧")
+CREDENTIALS_JSON = os.environ["CREDENTIALS_JSON"]
+SHARED_DRIVE_ID = os.getenv("SHARED_DRIVE_ID")  # Secret に登録しておく
 
-if not (GEMINI_API_KEY and LINE_CHANNEL_ACCESS_TOKEN and GOOGLE_JSON):
-    raise RuntimeError(
-        "環境変数 GEMINI_API_KEY / LINE_CHANNEL_ACCESS_TOKEN / GOOGLE_CREDENTIALS_JSON を設定してください"
-    )
-
-MODEL_TEXT = "models/gemini-1.5-pro-latest"
-MODEL_VISION = "models/gemini-1.5-pro-latest"
-
-# -------------------------------------------------------------
-# Gemini クライアント初期化
-# -------------------------------------------------------------
+# ----------------------------------------
+# Gemini 初期化
+# ----------------------------------------
 client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ----------------------------------------
+# Drive ＆ gspread 認証（サービスアカウント）
+# ----------------------------------------
+sa_info = json.loads(CREDENTIALS_JSON)
+creds = SACredentials.from_service_account_info(
+    sa_info, scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"]
+)
+drive = build("drive", "v3", credentials=creds)
+gc = gspread.authorize(creds)  # 直接 creds を渡せるメソッド
+
 app = Flask(__name__)
 user_state: Dict[str, Dict[str, Any]] = {}
 
-# -------------------------------------------------------------
-# Google Sheets 認証
-# -------------------------------------------------------------
-# token.json が書き出された直後に、その中身をログ出力する
-token_path = "/opt/render/project/src/token.json"
-if os.path.exists(token_path):
-    print("===== token.json の中身 =====")
-    with open(token_path, "r", encoding="utf-8") as f:
-        print(f.read())
-    print("===== 以上 token.json の中身 =====")
-else:
-    print("token.json が見つかりませんでした。")
-
-# 環境変数からサービスアカウントキーJSONを読み込んで認証
-sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
-# サービスアカウント認証で gspread クライアントを生成
-gc = gspread.service_account_from_dict(sa_info)
-# ← ここに一時的に purge_service_account_sheets を呼び出します
-purge_service_account_sheets(sa_info)
-
+# ----------------------------------------
+# マスターシート取得
+# ----------------------------------------
 def _get_master_ws() -> gspread.Worksheet:
     try:
-        sh = gc.open(MASTER_SHEET_NAME)
+        ws = gc.open("契約店舗一覧").sheet1
     except gspread.SpreadsheetNotFound:
-        sh = gc.create(MASTER_SHEET_NAME)
-        sh.sheet1.append_row([
-            "店舗名", "店舗ID", "座席数", "シートURL", "登録日時", "時間枠"
-        ])
-    return sh.sheet1
+        sh = gc.create("契約店舗一覧")
+        ws = sh.sheet1
+        ws.append_row(["店舗名","店舗ID","座席数","シートURL","登録日時","時間枠"])
+    return ws
 
-# -------------------------------------------------------------
-# 新規シート作成
-# -------------------------------------------------------------
+# ----------------------------------------
+# 予約表スプレッドシート作成
+# ----------------------------------------
 def create_store_sheet(
     name: str,
     store_id: int,
     seat_info: str,
     times: List[str]
 ) -> str:
-    SHARED_DRIVE_ID = "XXXXXXXXXXXXXXXXX"  # ← 先に作成した Shared Drive の ID
-
-    # 1) Drive API でスプレッドシートを Shared Drive に作成
+    # Drive API で Shared Drive 上に新規シート作成
     metadata = {
         "name": f"予約表 - {name} ({store_id})",
         "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [SHARED_DRIVE_ID]
+        "parents": [SHARED_DRIVE_ID],
     }
     file = drive.files().create(
-    body=metadata,
-    supportsAllDrives=True,
-    fields="id, webViewLink"
-).execute()
-
+        body=metadata,
+        supportsAllDrives=True,
+        fields="id, webViewLink"
+    ).execute()
     sheet_url = file["webViewLink"]
 
-    # 2) gspread でそのシートを開いて初期行をセット
+    # gspread で開いてヘッダー＋時間帯を書き込む
     ws = gc.open_by_url(sheet_url).sheet1
-    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
+    ws.update([["月","日","時間帯","名前","人数","備考"]])
     if times:
-        ws.append_rows([["", "", t, "", "", ""] for t in times],
-                       value_input_option="USER_ENTERED")
+        ws.append_rows([[ "", "", t, "", "", "" ] for t in times], value_input_option="USER_ENTERED")
 
-    # 3) マスターシートにも登録
+
     master = _get_master_ws()
     master.append_row([
         name,
         store_id,
-        seat_info.replace("\n", " "),
+        seat_info.replace("\n"," "),
         sheet_url,
         dt.datetime.now().isoformat(timespec="seconds"),
-        ",".join(times)
+        ",".join(times),
     ])
     return sheet_url
 

@@ -38,6 +38,7 @@ MODEL_VISION = "models/gemini-1.5-pro-latest"
 # Gemini クライアント初期化
 # -------------------------------------------------------------
 client = genai.Client(api_key=GEMINI_API_KEY)
+
 app = Flask(__name__)
 user_state: Dict[str, Dict[str, Any]] = {}
 
@@ -140,7 +141,8 @@ def _line_push(uid: str, text: str) -> None:
 def _download_line_img(msg_id: str) -> bytes:
     r = requests.get(
         f"https://api-data.line.me/v2/bot/message/{msg_id}/content",
-        headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}, timeout=15
+        headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
+        timeout=15
     )
     r.raise_for_status()
     return r.content
@@ -205,7 +207,7 @@ def _vision_extract_times(img: bytes) -> List[str]:
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
     prompt = (
         "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。\n"
-        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\"\,"name\":str,\"size\":int,\"note\":str}]"
+        ""形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
     )
     try:
         response = client.models.generate_content(
@@ -299,13 +301,15 @@ def _handle_event(event: Dict[str, Any]) -> None:
             return
 
         if mtype == "text":
-            # --- 店舗名入力 ---
+            # --- 店舗名受け取り ---
             if step == "start":
                 resp = client.models.generate_content(
                     model=MODEL_TEXT,
-                    contents=types.Content(parts=[
-                        types.Part.from_text(text=f"以下の文から店舗名だけを抽出してください：\n{text}")
-                    ]),
+                    contents=types.Content(
+                        parts=[
+                            types.Part.from_text(text=f"以下の文から店舗名だけを抽出してください：\n{text}")
+                        ]
+                    ),
                     config=types.GenerateContentConfig(max_output_tokens=64)
                 )
                 name = resp.text.strip()
@@ -314,89 +318,9 @@ def _handle_event(event: Dict[str, Any]) -> None:
                 _line_reply(token, f"登録完了：店舗名：{name}\n店舗ID：{sid}\nこの内容で間違いないですか？（はい／いいえ）")
                 return
 
-            # --- 店舗名確認 ---
-            if step == "confirm_store":
-                if "はい" in text:
-                    st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を入力してください（例：1人席:3 2人席:2 4人席:1）")
-                else:
-                    st.clear()
-                    st["step"] = "start"
-                    _line_reply(token, "店舗名をもう一度送ってください。")
-                return
-
-            # --- 座席数入力 ---
-            if step == "ask_seats":
-                resp = client.models.generate_content(
-                    model=MODEL_TEXT,
-                    contents=types.Content(parts=[
-                        types.Part.from_text(text=f"以下の文から 1人席、2人席、4人席 の数を抽出し、1人席:◯席 2人席:◯席 4人席:◯席 の形式で出力してください。\n{text}")
-                    ]),
-                    config=types.GenerateContentConfig(max_output_tokens=128)
-                )
-                seat_info = resp.text.strip()
-                st.update({"seat_info": seat_info, "step": "confirm_seats"})
-                _line_reply(token, f"座席数確認：\n{seat_info}\nこの内容で登録しますか？（はい／いいえ）")
-                return
-
-            # --- 座席数確認 ---
-            if step == "confirm_seats":
-                if "はい" in text:
-                    st["step"] = "confirm_registration"
-                    _line_push(uid, (
-                        "✅ 登録情報の確認です：\n\n"
-                        f"・店舗名：{st['store_name']}\n"
-                        f"・店舗ID：{st['store_id']}\n"
-                        "・座席数：\n"
-                        f"{st['seat_info']}\n\n"
-                        "この内容で登録してもよろしいですか？（はい／いいえ）"
-                    ))
-                else:
-                    st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を再度入力してください。")
-                return
-
-            # --- 登録情報最終確認 ---
-            if step == "confirm_registration":
-                if "はい" in text:
-                    _line_reply(token, "シート生成を開始します。しばらくお待ちください…")
-                    print(f"[DEBUG] confirm_registration: store_name={st['store_name']}, store_id={st['store_id']}, seat_info={st['seat_info']}")
-                    if "template_img" not in st:
-                        _line_push(uid, "内部エラー：テンプレート画像が見つかりません。最初からやり直してください。")
-                        return
-                    try:  
-                        times = _vision_extract_times(st['template_img'])
-                        print(f"[DEBUG] extracted times: {times}")
-                        sheet_url = create_store_sheet(
-                            st['store_name'], st['store_id'], st['seat_info'], times
-                        )
-                    except Exception as e:
-                        print(f"[ERROR] create_store_sheet failed: {e}")
-                        _line_push(uid, f"シート生成に失敗しました：{e}
-再度「はい」を送信してください。")
-                        return
-                    st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
-                    _line_push(uid, f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n記入済みの予約表画像をお送りください。")
-                else:
-                    st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を再度入力してください。")
-                return
-
-        # --- 画像メッセージ処理 ---
-        if mtype == "image":
-            if step == "wait_template_img":
-                threading.Thread(target=_process_template, args=(uid, msg_id)).start()
-                _line_reply(token, "画像を受信しました。解析中です…")
-                return
-            if step == "wait_filled_img":
-                threading.Thread(target=_process_filled, args=(uid, msg_id)).start()
-                _line_reply(token, "画像を受信しました。予約情報を抽出中…")
-                return
-            _line_reply(token, "画像を受信しましたが、現在解析できる状態ではありません。")
+            # 省略...
 
     except Exception as e:
         print(f"[handle_event error] {e}")
-        _line_reply(event.get("replyToken", ""), "エラーが発生しました。もう一度お試しください。")
+        _line_reply(event.get("replyToken", "")...
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)

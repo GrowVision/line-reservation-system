@@ -1,7 +1,6 @@
 from __future__ import annotations
 import base64
 import datetime as dt
-import json
 import os
 import random
 import threading
@@ -10,8 +9,6 @@ from typing import Any, Dict, List
 # 新SDK のインポート
 from google import genai
 from google.genai import types
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.oauth2.credentials import Credentials
 
 import gspread
 import requests
@@ -58,17 +55,11 @@ user_state: Dict[str, Dict[str, Any]] = {}
 # -------------------------------------------------------------
 # Google Sheets 認証
 # -------------------------------------------------------------
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-flow = InstalledAppFlow.from_client_secrets_file(
-    "credentials.json",
-    SCOPES
+gc = gspread.oauth(
+    credentials_filename="/opt/render/project/src/credentials.json",
+    authorized_user_filename="/opt/render/project/src/token.json"
 )
-creds = flow.run_local_server()  # ブラウザが開くので許可を出す
-with open("token.json", "w", encoding="utf-8") as f:
-    f.write(creds.to_json())
+
 
 # -------------------------------------------------------------
 # Google Sheets 認証

@@ -309,11 +309,17 @@ def _handle_event(event: Dict[str, Any]) -> None:
             if step == "confirm_store":
                 if "はい" in text:
                     st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を入力してください（例：1人席:3 2人席:2 4人席:1）")
+                    _line_reply(
+                        token,
+                        "座席数を入力してください（例：1人席:3 2人席:2 4人席:1）"
+                    )
                 else:
                     st.clear()
                     st["step"] = "start"
-                    _line_reply(token, "店舗名をもう一度送ってください。")
+                    _line_reply(
+                        token,
+                        "店舗名をもう一度送ってください。"
+                    )
                 return
 
             # --- 座席数入力 ---
@@ -321,68 +327,112 @@ def _handle_event(event: Dict[str, Any]) -> None:
                 resp = client.models.generate_content(
                     model=MODEL_TEXT,
                     contents=types.Content(parts=[
-                        types.Part.from_text(text=f"以下の文から1人席、2人席、4人席の数を抽出し「1人席:◯席 2人席:◯席 4人席:◯席」の形式で出力してください。\n{text}")
+                        types.Part.from_text(text=(
+                            f"以下の文から１人席、２人席、４人席の数を抽出し、"
+                            f"「1人席:◯席 2人席:◯席 4人席:◯席」の形式で出力してください。\n{text}"
+                        ))
                     ]),
                     config=types.GenerateContentConfig(max_output_tokens=128)
                 )
                 seat_info = resp.text.strip()
                 st.update({"seat_info": seat_info, "step": "confirm_seats"})
-                _line_reply(token, f"座席数確認：\n{seat_info}\nこの内容で登録しますか？（はい／いいえ）")
+                _line_reply(
+                    token,
+                    f"座席数確認：\n{seat_info}\nこの内容で登録しますか？（はい／いいえ）"
+                )
                 return
 
-            # --- 座席数確認 ---
+            # --- 座席数確認 → 登録情報確認へ ---
             if step == "confirm_seats":
                 if "はい" in text:
                     st["step"] = "confirm_registration"
                     _line_push(
                         uid,
-                        f"✅ 登録情報の確認です：\n\n・店舗名：{st['store_name']}\n・店舗ID：{st['store_id']}\n・座席数：\n{st['seat_info']}\n\nこの内容で登録してもよろしいですか？（はい／いいえ）"
+                        "✅ 登録情報の確認です：\n\n"
+                        f"・店舗名：{st['store_name']}\n"
+                        f"・店舗ID：{st['store_id']}\n"
+                        "・座席数：\n"
+                        f"{st['seat_info']}\n\n"
+                        "この内容で登録してもよろしいですか？（はい／いいえ）"
                     )
                 else:
                     st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を再度入力してください。")
+                    _line_reply(
+                        token,
+                        "座席数を再度入力してください。"
+                    )
                 return
 
             # --- 登録情報最終確認 ---
             if step == "confirm_registration":
                 if "はい" in text:
-                    _line_reply(token, "シート生成を開始します。しばらくお待ちください…")
-                    print(f"[DEBUG] confirm_registration: store_name={st['store_name']}, store_id={st['store_id']}, seat_info={st['seat_info']}")
-                    if "template_img" not in st:
-                        _line_push(uid, "内部エラー：テンプレート画像が見つかりません。最初からやり直してください。")
-                        return
-                    try:
-                        times = _vision_extract_times(st['template_img'])
-                        print(f"[DEBUG] extracted times: {times}")
-                        sheet_url = create_store_sheet(
-                            st['store_name'], st['store_id'], st['seat_info'], times
-                        )
-                    except Exception as e:
-                        print(f"[ERROR] create_store_sheet failed: {e}")
-                        _line_push(uid, f"シート生成に失敗しました：{e}\n再度「はい」を送信してください。")
-                        return
+                    # ユーザーへ処理中メッセージ
+                    _line_reply(
+                        token,
+                        "現在処理中です。しばらくお待ちください…"
+                    )
+                    # スプレッドシート作成
+                    times = _vision_extract_times(st["template_img"])
+                    sheet_url = create_store_sheet(
+                        st["store_name"],
+                        st["store_id"],
+                        st["seat_info"],
+                        times
+                    )
                     st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
-                    _line_push(uid, f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n記入済みの予約表画像をお送りください。")
+                    # 完了メッセージとURL
+                    _line_push(
+                        uid,
+                        f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n"
+                        "記入済みの予約表画像をお送りください。"
+                    )
                 else:
                     st["step"] = "ask_seats"
-                    _line_reply(token, "座席数を再度入力してください。")
+                    _line_reply(
+                        token,
+                        "座席数を再度入力してください。"
+                    )
                 return
 
         # --- 画像メッセージ処理 ---
         if mtype == "image":
             if step == "wait_template_img":
-                threading.Thread(target=_process_template, args=(uid, msg_id)).start()
-                _line_reply(token, "画像を受信しました。解析中です…")
+                threading.Thread(
+                    target=_process_template,
+                    args=(uid, msg_id)
+                ).start()
+                _line_reply(
+                    token,
+                    "画像を受信しました。解析中です…"
+                )
                 return
+
             if step == "wait_filled_img":
-                threading.Thread(target=_process_filled, args=(uid, msg_id)).start()
-                _line_reply(token, "画像を受信しました。予約情報を抽出中…")
+                threading.Thread(
+                    target=_process_filled,
+                    args=(uid, msg_id)
+                ).start()
+                _line_reply(
+                    token,
+                    "画像を受信しました。予約情報を抽出中…"
+                )
                 return
-            _line_reply(token, "画像を受信しましたが、解析できませんでした。再度お試しください。")
+
+            _line_reply(
+                token,
+                "画像を受信しましたが、現在解析できる状態ではありません。"
+            )
 
     except Exception as e:
         print(f"[handle_event error] {e}")
-        _line_reply(event.get("replyToken", ""), "エラーが発生しました。もう一度お試しください。")
+        _line_reply(
+            event.get("replyToken", ""),
+            "エラーが発生しました。もう一度お試しください。"
+        )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
+    )

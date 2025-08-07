@@ -235,24 +235,44 @@ def _process_template(uid: str, msg_id: str) -> None:
     _line_push(uid, f"{desc}\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
 
 # -------------------------------------------------------------
-# 記入済み画像処理
+# 記入済み画像受信→抽出→スプレッドシート追記フロー
 # -------------------------------------------------------------
 def _process_filled(uid: str, msg_id: str) -> None:
     st = user_state.get(uid)
     if not st or st.get("step") != "wait_filled_img":
         return
+
+    # LINEサーバーから画像をダウンロード
     img = _download_line_img(msg_id)
+
+    # 手書き予約情報をJSONで抽出
     rows = _vision_extract_rows(img)
     if not rows:
-        _line_push(uid, "予約情報が検出できませんでした。鮮明な画像をもう一度お送りください。")
+        _line_push(
+            uid,
+            "予約情報が検出できませんでした。鮮明な画像をもう一度お送りください。"
+        )
         return
+
+    # スプレッドシートに追記
     try:
         append_reservations(st["sheet_url"], rows)
     except Exception as e:
-        print(f"[_process_filled] append_reservations error={e}")
-        _line_push(uid, "予約情報のスプレッドシートへの追記に失敗しました。再度お試しください。")
+        print(f"[_process_filled] append_reservations error: {e}")
+        _line_push(
+            uid,
+            "予約情報のスプレッドシートへの追記に失敗しました。再度お試しください。"
+        )
         return
-    _line_push(uid, f"✅ 予約情報をスプレッドシートに追記しました！\n最新のシートはこちら：{st['sheet_url']}")
+
+    # 完了通知と最新URL送信
+    _line_push(
+        uid,
+        (
+            "✅ 予約情報をスプレッドシートに追記しました！\n"
+            f"最新のシートはこちら：{st['sheet_url']}"
+        )
+    )
     st["step"] = "done"
 
 # -------------------------------------------------------------

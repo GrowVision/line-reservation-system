@@ -21,6 +21,17 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 環境変数 & モデル設定
 # -------------------------------------------------------------
 load_dotenv()
+# Environment 変数から JSON をファイルとして書き出し
+cred_json = os.environ.get("CREDENTIALS_JSON")
+if cred_json:
+    with open("/opt/render/project/src/credentials.json", "w", encoding="utf-8") as f:
+        f.write(cred_json)
+
+# （同様に TOKEN_JSON があれば書き出す）
+token_json = os.environ.get("TOKEN_JSON")
+if token_json:
+    with open("/opt/render/project/src/token.json", "w", encoding="utf-8") as f:
+        f.write(token_json)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 GOOGLE_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON") or os.getenv("GOOGLE_SERVICE_ACCOUNT")

@@ -408,13 +408,28 @@ def _handle_event(
                     )
                 return
 
-            # ステップ: 登録情報最終確認
+            # --- 登録情報最終確認 ---
             if step == "confirm_registration":
                 if "はい" in text:
-                    st["step"] = "wait_template_img"
+                    # ユーザーへ処理中メッセージ
                     _line_reply(
                         token,
-                        "空欄の予約表の画像を送ってください。解析します…"
+                        "現在処理中です。しばらくお待ちください…"
+                    )
+                    # スプレッドシート作成
+                    times = _vision_extract_times(st["template_img"])
+                    sheet_url = create_store_sheet(
+                        st["store_name"],
+                        st["store_id"],
+                        st["seat_info"],
+                        times
+                    )
+                    st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
+                    # 完了メッセージとURL
+                    _line_push(
+                        uid,
+                        f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n"
+                        "記入済みの予約表画像をお送りください。"
                     )
                 else:
                     st["step"] = "ask_seats"
@@ -424,7 +439,7 @@ def _handle_event(
                     )
                 return
 
-        # 画像メッセージ処理
+        # --- 画像メッセージ処理 ---
         if mtype == "image":
             if step == "wait_template_img":
                 threading.Thread(
@@ -452,6 +467,7 @@ def _handle_event(
                 token,
                 "画像を受信しましたが、現在解析できる状態ではありません。"
             )
+
     except Exception as e:
         print(f"[handle_event error] {e}")
         _line_reply(

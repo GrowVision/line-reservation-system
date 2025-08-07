@@ -4,6 +4,7 @@ import datetime as dt
 import os
 import random
 import threading
+import json
 from typing import Any, Dict, List
 
 # 新SDK のインポート

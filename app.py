@@ -54,7 +54,7 @@ SCOPES = [
 # サービスアカウント認証を廃止し、プロジェクト内の credentials.json/token.json を指定
 gc = gspread.oauth(
     credentials_filename="/opt/render/project/src/credentials.json",
-    authorized_filename="/opt/render/project/src/token.json"
+    authorized_user_filename="/opt/render/project/src/token.json"
 )
 
 

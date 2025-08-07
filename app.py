@@ -14,8 +14,6 @@ import gspread
 import requests
 from dotenv import load_dotenv
 from flask import Flask, request
-from oauth2client.service_account import ServiceAccountCredentials
-
 
 # -------------------------------------------------------------
 # 環境変数 & モデル設定

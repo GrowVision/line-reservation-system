@@ -58,43 +58,37 @@ PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
 # ----------------------------------------
 # 予約表スプレッドシート作成
 # ----------------------------------------
-def create_store_sheet(
-    name: str,
-    store_id: int,
-    seat_info: str,
-    times: List[str]
-) -> str:
-    # ① Drive API でマイドライブ内フォルダにシートを作成
-    metadata = {
-        "name": f"予約表 - {name} ({store_id})",
-        "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [PARENT_FOLDER_ID],  # 共有した個人フォルダID
-    }
+def create_store_sheet(name, store_id, seat_info, times):
+    # 1) My Driveにシート作成
     file = drive.files().create(
-        body=metadata,
-        # supportsAllDrives=False  # 省略可。個人ドライブなので不要です
+        body={
+            "name": f"予約表 - {name} ({store_id})",
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+        },
         fields="id, webViewLink"
     ).execute()
+    sheet_id = file["id"]
     sheet_url = file["webViewLink"]
 
-    # ② gspread で開いてヘッダー＋時間帯を書き込む
+    # 2) 共有フォルダに移動
+    PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
+    drive.files().update(
+        fileId=sheet_id,
+        addParents=PARENT_FOLDER_ID,
+        removeParents="root",
+        supportsAllDrives=True,
+        fields="id, parents"
+    ).execute()
+
+    # 3) gspread で開いて初期行セット...
     ws = gc.open_by_url(sheet_url).sheet1
-    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
+    ws.update([["月","日","時間帯","名前","人数","備考"]])
     if times:
-        ws.append_rows([[ "", "", t, "", "", "" ] for t in times],
-                       value_input_option="USER_ENTERED")
+        ws.append_rows([[ "", "", t, "", "", "" ] for t in times], value_input_option="USER_ENTERED")
 
-    # ③ マスターシートにも登録
+    # 4) マスターへ登録...
     master = _get_master_ws()
-    master.append_row([
-        name,
-        store_id,
-        seat_info.replace("\n", " "),
-        sheet_url,
-        dt.datetime.now().isoformat(timespec="seconds"),
-        ",".join(times),
-    ])
-
+    master.append_row([name, store_id, seat_info, sheet_url, dt.datetime.now().isoformat(), ",".join(times)])
     return sheet_url
 
 # -------------------------------------------------------------

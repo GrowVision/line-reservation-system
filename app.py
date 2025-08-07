@@ -51,8 +51,11 @@ SCOPES = [
 # -------------------------------------------------------------
 # Google Sheets 認証
 # -------------------------------------------------------------
-# ユーザー OAuth2 認証に切り替え
-gc = gspread.oauth()   # credentials.json / token.json を参照
+# サービスアカウント認証を廃止し、プロジェクト内の credentials.json/token.json を指定
+gc = gspread.oauth(
+    credentials_filename="/opt/render/project/src/credentials.json",
+    authorized_filename="/opt/render/project/src/token.json"
+)
 
 
 def _get_master_ws() -> gspread.Worksheet:

@@ -52,6 +52,9 @@ def _get_master_ws() -> gspread.Worksheet:
         ws.append_row(["店舗名","店舗ID","座席数","シートURL","登録日時","時間枠"])
     return ws
 
+# ファイル冒頭あたりに
+PARENT_FOLDER_ID = os.getenv("PARENT_FOLDER_ID")
+
 # ----------------------------------------
 # 予約表スプレッドシート作成
 # ----------------------------------------
@@ -61,35 +64,37 @@ def create_store_sheet(
     seat_info: str,
     times: List[str]
 ) -> str:
-    # Drive API で Shared Drive 上に新規シート作成
+    # ① Drive API でマイドライブ内フォルダにシートを作成
     metadata = {
         "name": f"予約表 - {name} ({store_id})",
         "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [SHARED_DRIVE_ID],
+        "parents": [PARENT_FOLDER_ID],  # 共有した個人フォルダID
     }
     file = drive.files().create(
         body=metadata,
-        supportsAllDrives=True,
+        # supportsAllDrives=False  # 省略可。個人ドライブなので不要です
         fields="id, webViewLink"
     ).execute()
     sheet_url = file["webViewLink"]
 
-    # gspread で開いてヘッダー＋時間帯を書き込む
+    # ② gspread で開いてヘッダー＋時間帯を書き込む
     ws = gc.open_by_url(sheet_url).sheet1
-    ws.update([["月","日","時間帯","名前","人数","備考"]])
+    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
-        ws.append_rows([[ "", "", t, "", "", "" ] for t in times], value_input_option="USER_ENTERED")
+        ws.append_rows([[ "", "", t, "", "", "" ] for t in times],
+                       value_input_option="USER_ENTERED")
 
-
+    # ③ マスターシートにも登録
     master = _get_master_ws()
     master.append_row([
         name,
         store_id,
-        seat_info.replace("\n"," "),
+        seat_info.replace("\n", " "),
         sheet_url,
         dt.datetime.now().isoformat(timespec="seconds"),
         ",".join(times),
     ])
+
     return sheet_url
 
 # -------------------------------------------------------------

@@ -18,7 +18,7 @@ from flask import Flask, request
 from oauth2client.service_account import ServiceAccountCredentials
 
 # -------------------------------------------------------------
-# 環境変数 & モデル ID
+# 環境変数 & モデル設定
 # -------------------------------------------------------------
 load_dotenv()
 GEMINI_API_KEY            = os.getenv("GEMINI_API_KEY")
@@ -35,10 +35,9 @@ MODEL_TEXT   = "models/gemini-1.5-pro-latest"
 MODEL_VISION = "models/gemini-1.5-pro-latest"
 
 # -------------------------------------------------------------
-# 新SDK クライアント初期化
+# Gemini クライアント初期化
 # -------------------------------------------------------------
 client = genai.Client(api_key=GEMINI_API_KEY)
-
 app = Flask(__name__)
 user_state: Dict[str, Dict[str, Any]] = {}
 
@@ -67,16 +66,24 @@ def _get_master_ws() -> gspread.Worksheet:
 # -------------------------------------------------------------
 # スプレッドシート操作
 # -------------------------------------------------------------
-def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str]) -> str:
+def create_store_sheet(
+    name: str,
+    store_id: int,
+    seat_info: str,
+    times: List[str]
+) -> str:
     sh = gs.create(f"予約表 - {name} ({store_id})")
     sh.share(None, perm_type="anyone", role="writer")
     ws = sh.sheet1
+    # ヘッダー行
     ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
+    # 空行を時間帯分だけ追加
     if times:
         ws.append_rows(
             [["", "", t, "", "", ""] for t in times],
             value_input_option="USER_ENTERED"
         )
+    # マスターシートへ登録情報を追記
     _get_master_ws().append_row([
         name,
         store_id,
@@ -88,10 +95,16 @@ def create_store_sheet(name: str, store_id: int, seat_info: str, times: List[str
     return sh.url
 
 
-def append_reservations(sheet_url: str, rows: List[Dict[str, Any]]) -> None:
+def append_reservations(
+    sheet_url: str,
+    rows: List[Dict[str, Any]]
+) -> None:
     sh = gs.open_by_url(sheet_url)
     ws = sh.sheet1
-    values = [[r.get(k, "") for k in ("month", "day", "time", "name", "size", "note")] for r in rows]
+    values = [
+        [r.get(k, "") for k in ("month", "day", "time", "name", "size", "note")]
+        for r in rows
+    ]
     if values:
         ws.append_rows(values, value_input_option="USER_ENTERED")
 
@@ -108,6 +121,7 @@ def _line_reply(token: str, text: str) -> None:
         json={"replyToken": token, "messages": [{"type": "text", "text": text}]},
         timeout=10
     )
+
 
 def _line_push(uid: str, text: str) -> None:
     requests.post(
@@ -126,18 +140,18 @@ def _line_push(uid: str, text: str) -> None:
 def _download_line_img(msg_id: str) -> bytes:
     r = requests.get(
         f"https://api-data.line.me/v2/bot/message/{msg_id}/content",
-        headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"},
-        timeout=15
+        headers={"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}, timeout=15
     )
     r.raise_for_status()
     return r.content
 
 # -------------------------------------------------------------
-# 画像解析・要約
+# 画像テンプレート解析
 # -------------------------------------------------------------
 def _vision_describe_sheet(img: bytes) -> str:
     prompt = (
-        "画像は、手書きで記入するための予約表です。以下のように簡潔に構成をまとめてください：\n"
+        "画像は、手書きで記入するための予約表です。\n"
+        "以下のように簡潔に構成をまとめてください：\n"
         "- 表のタイトル\n"
         "- 日付欄\n"
         "- 列の構成（時間帯、名前、人数、卓番など）\n"
@@ -148,7 +162,10 @@ def _vision_describe_sheet(img: bytes) -> str:
         response = client.models.generate_content(
             model=MODEL_VISION,
             contents=types.Content(
-                parts=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), types.Part.from_text(text=prompt)]
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt)
+                ]
             ),
             config=types.GenerateContentConfig(max_output_tokens=1024)
         )
@@ -162,14 +179,17 @@ def _vision_describe_sheet(img: bytes) -> str:
 # -------------------------------------------------------------
 def _vision_extract_times(img: bytes) -> List[str]:
     prompt = (
-        "画像は空欄の飲食店予約表です。予約可能な時間帯 (HH:MM) を、"
-        "左上→右下の順に重複なく昇順で JSON 配列として返してください。"
+        "画像は空欄の飲食店予約表です。\n"
+        "予約可能な時間帯 (HH:MM) を、左上→右下の順に重複なく昇順で JSON 配列として返してください。"
     )
     try:
         response = client.models.generate_content(
             model=MODEL_VISION,
             contents=types.Content(
-                parts=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), types.Part.from_text(text=prompt)]
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt)
+                ]
             ),
             config=types.GenerateContentConfig(max_output_tokens=256)
         )
@@ -184,14 +204,17 @@ def _vision_extract_times(img: bytes) -> List[str]:
 # -------------------------------------------------------------
 def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
     prompt = (
-        "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。"
-        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\",\"name\":str,\"size\":int,\"note\":str}]"
+        "画像は手書きの予約表です。各行の予約情報を JSON 配列で返してください。\n"
+        "形式: [{\"month\":int,\"day\":int,\"time\":\"HH:MM\"\,"name\":str,\"size\":int,\"note\":str}]"
     )
     try:
         response = client.models.generate_content(
             model=MODEL_VISION,
             contents=types.Content(
-                parts=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), types.Part.from_text(text=prompt)]
+                parts=[
+                    types.Part.from_bytes(data=img, mime_type="image/jpeg"),
+                    types.Part.from_text(text=prompt)
+                ]
             ),
             config=types.GenerateContentConfig(max_output_tokens=2048)
         )
@@ -202,7 +225,7 @@ def _vision_extract_rows(img: bytes) -> List[Dict[str, Any]]:
         return []
 
 # -------------------------------------------------------------
-# 背景スレッド処理
+# テンプレート画像処理
 # -------------------------------------------------------------
 def _process_template(uid: str, msg_id: str) -> None:
     st = user_state.get(uid)
@@ -214,7 +237,10 @@ def _process_template(uid: str, msg_id: str) -> None:
         _line_push(uid, desc)
         return
     st.update({"template_img": img, "step": "confirm_template"})
-    _line_push(uid, f"{desc}\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）")
+    _line_push(
+        uid,
+        f"{desc}\n\nこの内容でスプレッドシートを作成してよろしいですか？（はい／いいえ）"
+    )
 
 # -------------------------------------------------------------
 # 記入済み画像処理
@@ -234,7 +260,10 @@ def _process_filled(uid: str, msg_id: str) -> None:
         print(f"[_process_filled] append_reservations error: {e}")
         _line_push(uid, "予約情報のスプレッドシートへの追記に失敗しました。再度お試しください。")
         return
-    _line_push(uid, f"✅ 予約情報をスプレッドシートに追記しました！\n最新のシートはこちら：{st['sheet_url']}")
+    _line_push(
+        uid,
+        f"✅ 予約情報をスプレッドシートに追記しました！\n最新のシートはこちら：{st['sheet_url']}"
+    )
     st["step"] = "done"
 
 # -------------------------------------------------------------
@@ -265,17 +294,18 @@ def _handle_event(event: Dict[str, Any]) -> None:
         st     = user_state.setdefault(uid, {"step": "start"})
         step   = st.get("step")
 
-        # 解析状況問い合わせ
         if mtype == "text" and "まだ解析中" in text:
             _line_reply(token, "まだ解析中です。しばらくお待ちください。解析できない場合は再度画像を送ってください。")
             return
 
         if mtype == "text":
-            # --- 店舗名受け取り ---
+            # --- 店舗名入力 ---
             if step == "start":
-                resp = client\models.generate_content(
+                resp = client.models.generate_content(
                     model=MODEL_TEXT,
-                    contents=types.Content(parts=[types.Part.from_text(text=f"以下の文から店舗名だけを抽出してください：\n{text}")]),
+                    contents=types.Content(parts=[
+                        types.Part.from_text(text=f"以下の文から店舗名だけを抽出してください：\n{text}")
+                    ]),
                     config=types.GenerateContentConfig(max_output_tokens=64)
                 )
                 name = resp.text.strip()
@@ -297,10 +327,34 @@ def _handle_event(event: Dict[str, Any]) -> None:
 
             # --- 座席数入力 ---
             if step == "ask_seats":
-                resp = client\models.generate_content(
+                resp = client.models.generate_content(
                     model=MODEL_TEXT,
-                    contents=types.Content(parts=[types.Part.from_text(text=f"以下の文から 1人席..."))
-                # ...（省略）...
+                    contents=types.Content(parts=[
+                        types.Part.from_text(text=f"以下の文から 1人席、2人席、4人席 の数を抽出し、1人席:◯席 2人席:◯席 4人席:◯席 の形式で出力してください。\n{text}")
+                    ]),
+                    config=types.GenerateContentConfig(max_output_tokens=128)
+                )
+                seat_info = resp.text.strip()
+                st.update({"seat_info": seat_info, "step": "confirm_seats"})
+                _line_reply(token, f"座席数確認：\n{seat_info}\nこの内容で登録しますか？（はい／いいえ）")
+                return
+
+            # --- 座席数確認 ---
+            if step == "confirm_seats":
+                if "はい" in text:
+                    st["step"] = "confirm_registration"
+                    _line_push(uid, (
+                        "✅ 登録情報の確認です：\n\n"
+                        f"・店舗名：{st['store_name']}\n"
+                        f"・店舗ID：{st['store_id']}\n"
+                        "・座席数：\n"
+                        f"{st['seat_info']}\n\n"
+                        "この内容で登録してもよろしいですか？（はい／いいえ）"
+                    ))
+                else:
+                    st["step"] = "ask_seats"
+                    _line_reply(token, "座席数を再度入力してください。")
+                return
 
             # --- 登録情報最終確認 ---
             if step == "confirm_registration":
@@ -310,7 +364,7 @@ def _handle_event(event: Dict[str, Any]) -> None:
                     if "template_img" not in st:
                         _line_push(uid, "内部エラー：テンプレート画像が見つかりません。最初からやり直してください。")
                         return
-                    try:
+                    try:  
                         times = _vision_extract_times(st['template_img'])
                         print(f"[DEBUG] extracted times: {times}")
                         sheet_url = create_store_sheet(
@@ -318,7 +372,8 @@ def _handle_event(event: Dict[str, Any]) -> None:
                         )
                     except Exception as e:
                         print(f"[ERROR] create_store_sheet failed: {e}")
-                        _line_push(uid, f"シート生成に失敗しました：{e}\n再度「はい」を送信してください。")
+                        _line_push(uid, f"シート生成に失敗しました：{e}
+再度「はい」を送信してください。")
                         return
                     st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
                     _line_push(uid, f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n記入済みの予約表画像をお送りください。")
@@ -327,9 +382,17 @@ def _handle_event(event: Dict[str, Any]) -> None:
                     _line_reply(token, "座席数を再度入力してください。")
                 return
 
+        # --- 画像メッセージ処理 ---
         if mtype == "image":
-            # 画像処理は省略せず既存の実装を維持
-            ...
+            if step == "wait_template_img":
+                threading.Thread(target=_process_template, args=(uid, msg_id)).start()
+                _line_reply(token, "画像を受信しました。解析中です…")
+                return
+            if step == "wait_filled_img":
+                threading.Thread(target=_process_filled, args=(uid, msg_id)).start()
+                _line_reply(token, "画像を受信しました。予約情報を抽出中…")
+                return
+            _line_reply(token, "画像を受信しましたが、現在解析できる状態ではありません。")
 
     except Exception as e:
         print(f"[handle_event error] {e}")

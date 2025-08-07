@@ -14,6 +14,31 @@ import gspread
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials as SACredentials
 
+sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
+creds = SACredentials.from_service_account_info(
+    sa_info,
+    scopes=["https://www.googleapis.com/auth/drive"]
+)
+drive = build("drive", "v3", credentials=creds)
+
+def create_store_sheet(...):
+    # Shared Drive ID
+    SHARED_DRIVE_ID = "XXXXXXXXXXXXXXXXX"
+    metadata = {
+        "name": f"予約表 - {name} ({store_id})",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [SHARED_DRIVE_ID]
+    }
+    file = drive.files().create(
+        body=metadata,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        fields="id, webViewLink"
+    ).execute()
+    sheet_url = file["webViewLink"]
+    # (あとは gspread.open_by_url などで操作)
+    return sheet_url
+
 def purge_service_account_sheets(sa_info: dict):
     """
     サービスアカウントのドライブ内にある

@@ -21,23 +21,6 @@ creds = SACredentials.from_service_account_info(
 )
 drive = build("drive", "v3", credentials=creds)
 
-def create_store_sheet(...):
-    # Shared Drive ID
-    SHARED_DRIVE_ID = "XXXXXXXXXXXXXXXXX"
-    metadata = {
-        "name": f"予約表 - {name} ({store_id})",
-        "mimeType": "application/vnd.google-apps.spreadsheet",
-        "parents": [SHARED_DRIVE_ID]
-    }
-    file = drive.files().create(
-        body=metadata,
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-        fields="id, webViewLink"
-    ).execute()
-    sheet_url = file["webViewLink"]
-    # (あとは gspread.open_by_url などで操作)
-    return sheet_url
 
 def purge_service_account_sheets(sa_info: dict):
     """
@@ -143,25 +126,40 @@ def create_store_sheet(
     seat_info: str,
     times: List[str]
 ) -> str:
-    sh = gc.create(f"予約表 - {name} ({store_id})")
-    sh.share(None, perm_type="anyone", role="writer")
-    ws = sh.sheet1
-    ws.update(["月", "日", "時間帯", "名前", "人数", "備考"])
+    SHARED_DRIVE_ID = "XXXXXXXXXXXXXXXXX"  # ← 先に作成した Shared Drive の ID
 
+    # 1) Drive API でスプレッドシートを Shared Drive に作成
+    metadata = {
+        "name": f"予約表 - {name} ({store_id})",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": [SHARED_DRIVE_ID]
+    }
+    file = drive.files().create(
+        body=metadata,
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        fields="id, webViewLink"
+    ).execute()
+    sheet_url = file["webViewLink"]
+
+    # 2) gspread でそのシートを開いて初期行をセット
+    ws = gc.open_by_url(sheet_url).sheet1
+    ws.update([["月", "日", "時間帯", "名前", "人数", "備考"]])
     if times:
-        rows = [["", "", t, "", "", ""] for t in times]
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        ws.append_rows([["", "", t, "", "", ""] for t in times],
+                       value_input_option="USER_ENTERED")
 
+    # 3) マスターシートにも登録
     master = _get_master_ws()
     master.append_row([
         name,
         store_id,
         seat_info.replace("\n", " "),
-        sh.url,
+        sheet_url,
         dt.datetime.now().isoformat(timespec="seconds"),
         ",".join(times)
     ])
-    return sh.url
+    return sheet_url
 
 # -------------------------------------------------------------
 # 予約情報追記

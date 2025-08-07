@@ -317,7 +317,7 @@ def _handle_event(event: Dict[str, Any]) -> None:
                     st.update({'step': 'wait_filled_img', 'sheet_url': url})
                     _line_push(uid, f"✅ シート作成完了！ {url}\n記入済みの画像を送ってください。")
                 else:
-                    st.update({'step": 'wait_template_img'})
+                    st.update({'step': 'wait_template_img'})
                     _line_reply(token, 'テンプレート画像を再度お送りください。')
                 return
         if mtype == 'image':

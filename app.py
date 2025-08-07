@@ -384,36 +384,46 @@ def _handle_event(event: Dict[str, Any]) -> None:
                 return
 
             # --- 登録情報最終確認 ---
-            if step == "confirm_registration":
-                if "はい" in text:
-                    # ユーザーへ処理中メッセージ
-                    _line_reply(
-                        token,
-                        "現在処理中です。しばらくお待ちください…"
-                    )
-                    # スプレッドシート作成
-                    times = _vision_extract_times(st["template_img"])
-                    sheet_url = create_store_sheet(
-                        st["store_name"],
-                        st["store_id"],
-                        st["seat_info"],
-                        times
-                    )
-                    st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
-                    # 完了メッセージとURL
-                    _line_push(
-                        uid,
-                        f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n"
-                        "記入済みの予約表画像をお送りください。"
-                    )
-                else:
-                    st["step"] = "ask_seats"
-                    _line_reply(
-                        token,
-                        "座席数を再度入力してください。"
-                    )
-                return
+if step == "confirm_registration":
+    if "はい" in text:
+        # 1) ユーザーに処理開始を通知
+        _line_reply(token, "シート生成を開始します。しばらくお待ちください…")
 
+        # 2) デバッグ用ログ
+        print(f"[DEBUG] confirm_registration: store_name={st['store_name']}, store_id={st['store_id']}, seat_info={st['seat_info']}")
+
+        # 3) テンプレ画像が state に残っているかチェック
+        if "template_img" not in st:
+            _line_push(uid, "内部エラー：テンプレート画像の情報が見つかりません。最初からやり直してください。")
+            return
+
+        try:
+            # 4) 時間帯抽出 → シート生成
+            times = _vision_extract_times(st["template_img"])
+            print(f"[DEBUG] extracted times: {times}")
+            sheet_url = create_store_sheet(
+                st["store_name"],
+                st["store_id"],
+                st["seat_info"],
+                times
+            )
+        except Exception as e:
+            # 5) 例外キャッチ
+            print(f"[ERROR] create_store_sheet failed: {e}")
+            _line_push(uid, f"シート生成に失敗しました：{e}\n再度「はい」を送ってください。")
+            return
+
+        # 6) 正常終了
+        st.update({"sheet_url": sheet_url, "step": "wait_filled_img"})
+        _line_push(
+            uid,
+            f"✅ スプレッドシートを作成しました：\n{sheet_url}\n\n"
+            "記入済みの予約表画像をお送りください。"
+        )
+    else:
+        st["step"] = "ask_seats"
+        _line_reply(token, "座席数を再度入力してください。")
+    return
         # --- 画像メッセージ処理 ---
         if mtype == "image":
             if step == "wait_template_img":

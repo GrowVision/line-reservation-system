@@ -51,17 +51,15 @@ SCOPES = [
 # -------------------------------------------------------------
 # Google Sheets 認証
 # -------------------------------------------------------------
-creds = ServiceAccountCredentials.from_json_keyfile_dict(
-    json.loads(GOOGLE_JSON),
-    SCOPES
-)
-gs = gspread.authorize(creds)
+# ユーザー OAuth2 認証に切り替え
+gc = gspread.oauth()   # credentials.json / token.json を参照
+
 
 def _get_master_ws() -> gspread.Worksheet:
     try:
-        sh = gs.open(MASTER_SHEET_NAME)
+        sh = gc.open(MASTER_SHEET_NAME)
     except gspread.SpreadsheetNotFound:
-        sh = gs.create(MASTER_SHEET_NAME)
+        sh = gc.create(MASTER_SHEET_NAME)
         sh.sheet1.append_row([
             "店舗名", "店舗ID", "座席数", "シートURL", "登録日時", "時間枠"
         ])
@@ -76,7 +74,7 @@ def create_store_sheet(
     seat_info: str,
     times: List[str]
 ) -> str:
-    sh = gs.create(f"予約表 - {name} ({store_id})")
+    sh = gc.create(f"予約表 - {name} ({store_id})")
     sh.share(None, perm_type="anyone", role="writer")
     ws = sh.sheet1
     ws.update(["月", "日", "時間帯", "名前", "人数", "備考"])
@@ -103,7 +101,7 @@ def append_reservations(
     sheet_url: str,
     rows: List[Dict[str, Any]]
 ) -> None:
-    sh = gs.open_by_url(sheet_url)
+    sh = gc.open_by_url(sheet_url)
     ws = sh.sheet1
     values = [
         [

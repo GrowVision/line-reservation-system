@@ -69,6 +69,32 @@ sa_info = json.loads(os.environ["CREDENTIALS_JSON"])
 
 # サービスアカウント認証で gspread クライアントを生成
 gc = gspread.service_account_from_dict(sa_info)
+purge_service_account_sheets(sa_info)
+
+
+from googleapiclient.discovery import build
+
+def purge_service_account_sheets(sa_info: dict):
+    """
+    サービスアカウントのドライブ内にある
+    すべてのスプレッドシートを削除します。
+    """
+    # gspread の内部 creds を取り出して Drive API クライアントを作成
+    creds = gspread.service_account_from_dict(sa_info)._credentials
+    drive = build("drive", "v3", credentials=creds)
+
+    # Spreadsheet MIME type のみを取得
+    resp = drive.files().list(
+        q="mimeType='application/vnd.google-apps.spreadsheet'",
+        fields="files(id, name)",
+        pageSize=1000
+    ).execute()
+    files = resp.get("files", [])
+    for f in files:
+        print(f"Deleting: {f['name']} ({f['id']})")
+        drive.files().delete(fileId=f["id"]).execute()
+    print("❌ All service-account sheets purged.")
+
 
 def _get_master_ws() -> gspread.Worksheet:
     try:
